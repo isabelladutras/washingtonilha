@@ -23,4 +23,11 @@
 // IMPORTANTE: este é um painel separado do Polo 1740 — crie um projeto Firebase NOVO e
 // específico para a Washington Ilha (não reaproveite a configuração do Polo 1740), para que
 // os dados dos dois painéis não se misturem no mesmo banco.
-window.FIREBASE_CONFIG = null;
+window.FIREBASE_CONFIG = {
+  apiKey: "AIzaSyDDX6iqwC751f3ug9kdLTgFA0hEITMXAAk",
+  authDomain: "washington-2c0ca.firebaseapp.com",
+  projectId: "washington-2c0ca",
+  storageBucket: "washington-2c0ca.firebasestorage.app",
+  messagingSenderId: "308701324586",
+  appId: "1:308701324586:web:4e9f33cd00ff94e99c6a53"
+};
