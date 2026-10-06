@@ -9,7 +9,7 @@
 
   /* ---------- Armazenamento local (por navegador) + sincronização opcional entre navegadores ---------- */
   const Sync = window.Sync || { configured: function () { return false; }, init: function () {}, push: function () { return Promise.resolve(false); } };
-  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas'];
+  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados'];
   const LS = {
     get: function (k, def) { try { const v = localStorage.getItem('washington.' + k); return v == null ? def : JSON.parse(v); } catch (e) { return def; } },
     set: function (k, v) {
@@ -26,11 +26,12 @@
     professores: LS.get('professores', null) || (DATA.professores || []).map(function (p) { return Object.assign({}, p); }),
     turmas: LS.get('turmas', null) || (DATA.turmas || []).map(function (t) { return Object.assign({}, t); }),
     alunos: alunosSalvos || (DATA.alunos || []).map(function (a) {
-      return Object.assign({ formaPagamento: 'desconhecido', email: '' }, a, {
+      return Object.assign({ formaPagamento: 'desconhecido', email: '', bolsista: false, dataInicio: '' }, a, {
         pagamento: Object.assign({ valorEmAberto: '' }, a.pagamento), frequencia: Object.assign({}, a.frequencia),
         materialDidatico: Object.assign({}, a.materialDidatico), rematricula: Object.assign({}, a.rematricula),
         livroDidatico: Object.assign({ qual: '', comprado: false, mensagemEnviada: false }, a.livroDidatico),
         cobranca: Object.assign({ etapa: 0, enviadoEm: '' }, a.cobranca),
+        cancelamento: Object.assign({ solicitado: false, data: '', motivo: '' }, a.cancelamento),
       });
     }),
     matriculas: LS.get('matriculas', []),
@@ -42,7 +43,17 @@
     materiais: LS.get('materiais', []),
     entradas: LS.get('entradas', []),
     despesas: LS.get('despesas', []),
+    pendencias: LS.get('pendencias', []),
+    comunicados: LS.get('comunicados', []),
   };
+
+  /* ---------- Garante que alunos já salvos antes destes campos existirem não quebrem o painel ---------- */
+  S.alunos.forEach(function (a) {
+    if (a.dataInicio == null) a.dataInicio = '';
+    if (!a.cancelamento) a.cancelamento = { solicitado: false, data: '', motivo: '' };
+    if (!a.livroDidatico) a.livroDidatico = { qual: '', comprado: false, mensagemEnviada: false };
+    else if (a.livroDidatico.comprado == null) a.livroDidatico.comprado = false;
+  });
 
   /* ---------- Migração: traz dados novos (ex.: telefone/e-mail importados) sem apagar edições manuais ---------- */
   (function migrarDadosPadrao() {
@@ -76,6 +87,9 @@
     novaEntrada: { data: HOJE, alunoId: '', alunoNome: '', valor: '', formaPagamento: 'Pix', referente: '', obs: '' },
     novaDespesa: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '' },
     fMesEntradas: '', fMesDespesas: '',
+    novaPendencia: { texto: '', alunoId: '', turmaId: '', prazo: '' }, fPendencia: 'abertas',
+    novoComunicado: { mensagem: '', turmaId: '' },
+    semProfsOcultos: {},
     logado: !Sync.configured(), authEmail: '', loginEmail: '', loginSenha: '', loginErro: '', loginCarregando: false,
   };
   const D = {};
@@ -135,15 +149,17 @@
     material: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/><path d="M9 7h8M9 11h5"/>',
     entradas: '<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/><path d="M4 4l3 3M20 4l-3 3"/>',
     despesas: '<path d="M12 2v20M17 19H9.5a3.5 3.5 0 0 1 0-7h5a3.5 3.5 0 0 0 0-7H6"/>',
+    pendencias: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h5"/><path d="m8.5 19 1.5 1.5L12 18"/>',
+    comunicados: '<path d="M3 11v2a2 2 0 0 0 2 2h1l3 4v-4h8a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z"/>',
     conferencia: '<path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
     buscar: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
     dados: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>'
   };
   const VIEWS = [
-    { id: 'semana', nome: 'Semana' }, { id: 'turmas', nome: 'Turmas' }, { id: 'matriculas', nome: 'Matrículas' },
+    { id: 'semana', nome: 'Semana' }, { id: 'pendencias', nome: 'Pendências' }, { id: 'turmas', nome: 'Turmas' }, { id: 'matriculas', nome: 'Matrículas' },
     { id: 'compromissos', nome: 'Compromissos' }, { id: 'frequencia', nome: 'Frequência' }, { id: 'inadimplencia', nome: 'Inadimplência' },
     { id: 'material', nome: 'Material' }, { id: 'entradas', nome: 'Entradas' }, { id: 'despesas', nome: 'Despesas' },
-    { id: 'alunos', nome: 'Alunos' },
+    { id: 'alunos', nome: 'Alunos' }, { id: 'comunicados', nome: 'Comunicados' },
     { id: 'professores', nome: 'Professores' }, { id: 'conferencia', nome: 'Conferência' },
     { id: 'buscar', nome: 'Buscar' }, { id: 'dados', nome: 'Dados' }
   ];
@@ -249,9 +265,9 @@
     const app = $('#app');
     const foco = capturarFoco(app);
     app.innerHTML = ({
-      semana: viewSemana, turmas: viewTurmas, matriculas: viewMatriculas, compromissos: viewCompromissos,
+      semana: viewSemana, pendencias: viewPendencias, turmas: viewTurmas, matriculas: viewMatriculas, compromissos: viewCompromissos,
       frequencia: viewFrequencia, inadimplencia: viewInadimplencia, material: viewMaterial, entradas: viewEntradas, despesas: viewDespesas,
-      alunos: viewAlunos, professores: viewProfessores,
+      alunos: viewAlunos, comunicados: viewComunicados, professores: viewProfessores,
       conferencia: viewConferencia, buscar: viewBuscar, dados: viewDados
     }[V.view] || viewSemana)();
     if (!restaurarFoco(app, foco)) app.focus();
@@ -285,11 +301,20 @@
   }
 
   /* ---------- Semana (calendário com datas reais) ---------- */
+  /* Paleta cíclica para colorir cada professor(a) na grade da semana — ajuda a enxergar de longe
+     quem está em qual horário, sem precisar ler o nome em cada card. */
+  const PROF_CORES = ['#1565c0', '#9c4221', '#1b7a46', '#8a3ba0', '#b7791f', '#0e7490', '#b42318', '#4a5568'];
+  function corDoProfessor(nome) {
+    const lista = D.profsOrdenados || (D.profsOrdenados = Array.from(new Set(S.turmas.map(function (t) { return t.professor || '—'; }))).sort());
+    const i = lista.indexOf(nome || '—');
+    return PROF_CORES[(i < 0 ? 0 : i) % PROF_CORES.length];
+  }
   function viewSemana() {
     const segunda = L.somaDias(L.segundaDaSemana(HOJE), V.semanaOffset * 7);
     const semestreSemana = L.semestreDeData(segunda);
     const turmasDoSemestre = S.turmas.filter(function (t) { return t.semestre === semestreSemana && t.situacao !== 'A confirmar'; });
     const confirmar = S.turmas.filter(function (t) { return t.semestre === semestreSemana && t.situacao === 'A confirmar'; });
+    D.profsOrdenados = Array.from(new Set(turmasDoSemestre.map(function (t) { return t.professor || '—'; }))).sort();
     const grade = L.gradeSemanal(turmasDoSemestre);
     const diasSemana = L.DIAS_ORDEM.map(function (d, i) { return { id: d, data: L.somaDias(segunda, i) }; });
     const colunas = diasSemana.map(function (dia) {
@@ -304,18 +329,25 @@
             '<div class="gi-prof">' + esc(c.comQuem || '') + '</div></div>';
         }).join('') +
         (lista.length ? lista.map(function (t) {
-          return '<div class="grade-item" data-act="ver-turma" data-id="' + t.id + '">' +
+          const oculto = V.semProfsOcultos[t.professor || '—'];
+          return '<div class="grade-item' + (oculto ? ' dim' : '') + '" style="--pc:' + corDoProfessor(t.professor) + '" data-act="ver-turma" data-id="' + t.id + '">' +
             '<div class="gi-hora">' + esc(t.horario) + '</div><div class="gi-turma">' + esc(t.turma) + '</div>' +
             '<div class="gi-prof">' + esc(t.professor || '') + (t.sala ? (' · ' + esc(t.sala)) : '') + '</div></div>';
         }).join('') : (compromissosDoDia.length ? '' : '<div class="grade-vazio">—</div>')) + '</div>';
     }).join('');
     const faixa = L.fmtCurta(segunda) + ' – ' + L.fmtCurta(L.somaDias(segunda, 6)) + ' · semestre ' + semestreSemana;
+    const legenda = D.profsOrdenados.map(function (nome) {
+      const oculto = V.semProfsOcultos[nome];
+      return '<button class="legenda-prof' + (oculto ? ' off' : '') + '" type="button" data-act="semana-prof-toggle" data-prof="' + esc(nome) + '">' +
+        '<span class="legenda-bolha" style="--pc:' + corDoProfessor(nome) + '"></span>' + esc(nome) + '</button>';
+    }).join('');
     return '<div class="topo"><h1>Semana</h1><div class="topo-acoes">' +
       '<button class="btn sm" type="button" data-act="semana-nav" data-d="-1">← Semana anterior</button>' +
       '<button class="btn sm" type="button" data-act="semana-nav" data-d="0">Hoje</button>' +
       '<button class="btn sm" type="button" data-act="semana-nav" data-d="1">Próxima semana →</button>' +
       '</div></div>' +
       '<p class="muted">' + esc(faixa) + '</p>' +
+      (D.profsOrdenados.length > 1 ? ('<div class="legenda-profs"><span class="muted legenda-dica">Clique para destacar só as turmas de um(a) professor(a):</span>' + legenda + (Object.keys(V.semProfsOcultos).length ? '<button class="btn sm" type="button" data-act="semana-prof-limpar">Mostrar todos</button>' : '') + '</div>') : '') +
       '<div class="grade">' + colunas + '</div>' +
       (confirmar.length ? ('<h2 class="subtitulo">Turmas a confirmar (' + confirmar.length + ')</h2><div class="lista-cards">' + confirmar.map(function (t) { return cardTurma(t); }).join('') + '</div>') : '');
   }
@@ -613,7 +645,7 @@
       '</div></div>';
   }
   function viewInadimplencia() {
-    const lista = S.alunos.filter(function (a) { return a.pagamento.status === 'atrasado' || a.pagamento.status === 'pendente'; })
+    const lista = S.alunos.filter(function (a) { return !a.bolsista && (a.pagamento.status === 'atrasado' || a.pagamento.status === 'pendente'); })
       .sort(function (a, b) {
         if (a.pagamento.status !== b.pagamento.status) return a.pagamento.status === 'atrasado' ? -1 : 1;
         return L.norm(a.nome).localeCompare(L.norm(b.nome));
@@ -769,6 +801,91 @@
       (lista.length ? ('<table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + lista.map(linhaDespesa).join('') + '</tbody></table>') : '<p class="muted">Nenhuma despesa registrada ainda.</p>');
   }
 
+  /* ---------- Pendências (nada pode passar batido) ---------- */
+  function opcoesTurmaSelect(selecionada) {
+    return '<option value="">— Sem turma específica —</option>' + S.turmas.slice().sort(function (a, b) { return L.norm(a.turma).localeCompare(L.norm(b.turma)); })
+      .map(function (t) { return '<option value="' + t.id + '"' + (selecionada === t.id ? ' selected' : '') + '>' + esc(t.turma) + ' · ' + esc(t.semestre) + '</option>'; }).join('');
+  }
+  function opcoesAlunoSelect(selecionado) {
+    return '<option value="">— Sem aluno específico —</option>' + S.alunos.slice().sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); })
+      .map(function (a) { return '<option value="' + a.id + '"' + (selecionado === a.id ? ' selected' : '') + '>' + esc(a.nome) + '</option>'; }).join('');
+  }
+  function linhaPendencia(p) {
+    const a = p.alunoId ? D.alunoPorId[p.alunoId] : null;
+    const t = p.turmaId ? D.turmaPorId[p.turmaId] : null;
+    const atrasada = !p.resolvida && p.prazo && p.prazo < HOJE;
+    return '<div class="pendencia' + (p.resolvida ? ' resolvida' : '') + '">' +
+      '<label class="check"><input type="checkbox" data-act="pendencia-toggle" data-id="' + p.id + '"' + (p.resolvida ? ' checked' : '') + '>' +
+      '<span><b>' + esc(p.texto) + '</b>' +
+      (a || t ? ('<div class="muted" style="font-size:.82rem">' + (a ? esc(a.nome) : '') + (a && t ? ' · ' : '') + (t ? esc(t.turma) : '') + '</div>') : '') +
+      '</span></label>' +
+      (p.prazo ? ('<span class="tag ' + (atrasada ? 'tag-erro' : 'tag-neutro') + '">prazo ' + esc(L.fmtCurta(p.prazo)) + '</span>') : '') +
+      '<button class="btn sm" type="button" data-act="excluir-pendencia" data-id="' + p.id + '">Excluir</button>' +
+      '</div>';
+  }
+  function viewPendencias() {
+    const np = V.novaPendencia;
+    let lista = S.pendencias.slice();
+    if (V.fPendencia === 'abertas') lista = lista.filter(function (p) { return !p.resolvida; });
+    lista.sort(function (a, b) { return (a.prazo || '9999').localeCompare(b.prazo || '9999'); });
+    const nAbertas = S.pendencias.filter(function (p) { return !p.resolvida; }).length;
+    return '<div class="topo"><h1>Pendências</h1></div>' +
+      '<p class="muted">Use esta aba para anotar tudo o que precisa ser resolvido na unidade — documento faltando, aluno para ligar, contrato para assinar — para que nada passe batido.</p>' +
+      '<section class="bloco">' +
+      '<h2>Nova pendência</h2>' +
+      '<div class="campo"><label>O que precisa ser feito</label><input type="text" data-act="pend-texto" value="' + esc(np.texto) + '" placeholder="Ex.: Pedir contrato assinado da Maria"></div>' +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Aluno (opcional)</label><select data-act="pend-aluno">' + opcoesAlunoSelect(np.alunoId) + '</select></div>' +
+      '<div class="campo"><label>Turma (opcional)</label><select data-act="pend-turma">' + opcoesTurmaSelect(np.turmaId) + '</select></div>' +
+      '<div class="campo"><label>Prazo (opcional)</label><input type="date" data-act="pend-prazo" value="' + esc(np.prazo) + '"></div>' +
+      '</div>' +
+      '<button class="btn on" type="button" data-act="add-pendencia">Adicionar</button>' +
+      '</section>' +
+      '<div class="filtros">' +
+      '<select data-act="filtro-pendencia"><option value="abertas"' + (V.fPendencia === 'abertas' ? ' selected' : '') + '>Em aberto (' + nAbertas + ')</option><option value="todas"' + (V.fPendencia === 'todas' ? ' selected' : '') + '>Todas (' + S.pendencias.length + ')</option></select>' +
+      '</div>' +
+      (lista.length ? ('<div class="lista-pendencias">' + lista.map(linhaPendencia).join('') + '</div>') : '<p class="muted">Nenhuma pendência' + (V.fPendencia === 'abertas' ? ' em aberto' : '') + '.</p>');
+  }
+
+  /* ---------- Comunicados (mensagens em massa para alunos) ---------- */
+  function alunosDoComunicado(c) {
+    if (!c.turmaId) return S.alunos.filter(function (a) { return a.telefone; });
+    const t = D.turmaPorId[c.turmaId];
+    if (!t) return [];
+    const nomes = (t.alunosNomes || []).map(function (n) { return L.norm(n.replace(/\s*[\(\*].*$/, '').replace(/\*$/, '')); });
+    return S.alunos.filter(function (a) { return a.telefone && nomes.indexOf(L.norm(a.nome)) > -1; });
+  }
+  function linhaComunicado(c) {
+    const t = c.turmaId ? D.turmaPorId[c.turmaId] : null;
+    const alunosAlvo = alunosDoComunicado(c);
+    const enviados = c.enviados || {};
+    const nEnviados = alunosAlvo.filter(function (a) { return enviados[a.id]; }).length;
+    return '<div class="bloco"><div class="ct-topo"><b>' + esc(L.fmtCurta(c.data)) + ' · ' + (t ? esc(t.turma) : 'Todos os alunos com WhatsApp') + '</b>' +
+      '<span class="tag tag-neutro">' + nEnviados + ' / ' + alunosAlvo.length + ' enviado(s)</span>' +
+      '<button class="btn sm" type="button" data-act="excluir-comunicado" data-id="' + c.id + '">Excluir</button></div>' +
+      '<p>' + esc(c.mensagem) + '</p>' +
+      (alunosAlvo.length ? ('<ul class="lista-alunos">' + alunosAlvo.map(function (a) {
+        return '<li class="aluno-turma-linha"><div>' + esc(a.nome) + (enviados[a.id] ? ' <span class="tag tag-ok">Enviado</span>' : '') + '</div>' +
+          '<div class="aluno-turma-acoes">' +
+          '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, c.mensagem) + '" data-act="comunicado-marcar-enviado" data-com="' + c.id + '" data-aluno="' + a.id + '">Abrir no WhatsApp</a>' +
+          '</div></li>';
+      }).join('') + '</ul>') : '<p class="muted">Nenhum aluno com telefone cadastrado nessa turma.</p>');
+  }
+  function viewComunicados() {
+    const nc = V.novoComunicado;
+    const lista = S.comunicados.slice().sort(function (a, b) { return (b.data || '').localeCompare(a.data || '') || (b.id || '').localeCompare(a.id || ''); });
+    return '<div class="topo"><h1>Comunicados</h1></div>' +
+      '<p class="muted">Escreva um aviso e dispare para todos os alunos de uma turma (ou de todas as turmas) por WhatsApp, acompanhando quem já recebeu.</p>' +
+      '<section class="bloco">' +
+      '<h2>Novo comunicado</h2>' +
+      '<div class="campo"><label>Turma</label><select data-act="com-turma"><option value="">Todos os alunos com WhatsApp cadastrado</option>' +
+      S.turmas.slice().sort(function (a, b) { return L.norm(a.turma).localeCompare(L.norm(b.turma)); }).map(function (t) { return '<option value="' + t.id + '"' + (nc.turmaId === t.id ? ' selected' : '') + '>' + esc(t.turma) + ' · ' + esc(t.semestre) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="campo"><label>Mensagem</label><textarea data-act="com-mensagem" rows="3" placeholder="Escreva o comunicado…">' + esc(nc.mensagem) + '</textarea></div>' +
+      '<button class="btn on" type="button" data-act="gerar-comunicado">Gerar lista de envio</button>' +
+      '</section>' +
+      (lista.length ? lista.map(linhaComunicado).join('') : '<p class="muted">Nenhum comunicado disparado ainda.</p>');
+  }
+
   /* ---------- Professores ---------- */
   function viewProfessores() {
     return '<div class="topo"><h1>Professores</h1></div>' +
@@ -784,9 +901,28 @@
   }
 
   /* ---------- Alunos ---------- */
+  const MOTIVOS_CANCELAMENTO = ['Mudou de cidade', 'Dificuldade financeira', 'Mudou de horário/turma', 'Concluiu o nível', 'Insatisfação', 'Outro'];
   function pagamentoBadge(st) {
     const cls = { 'em dia': 'tag-ok', atrasado: 'tag-erro', pendente: 'tag-aviso', desconhecido: 'tag-neutro' }[st] || 'tag-neutro';
     return '<span class="tag ' + cls + '">' + esc(st || 'desconhecido') + '</span>';
+  }
+  /* A data de rematrícula não é um campo próprio do aluno: vem do contrato da matrícula mais
+     recente dele (contratoFim). Pegamos a matrícula com o contrato que vence mais tarde. */
+  function rematriculaInfoAluno(a) {
+    const ms = S.matriculas.filter(function (m) { return m.alunoId === a.id && m.contratoFim; });
+    if (!ms.length) return null;
+    ms.sort(function (x, y) { return (y.contratoFim || '').localeCompare(x.contratoFim || ''); });
+    const m = ms[0];
+    return { contratoFim: m.contratoFim, dias: L.diasAte(m.contratoFim) };
+  }
+  function tagRematricula(info) {
+    if (!info) return '<span class="tag tag-neutro">sem contrato cadastrado</span>';
+    let cls = 'tag-ok', texto = 'rematrícula em ' + esc(L.fmtCurta(info.contratoFim));
+    if (info.dias != null) {
+      if (info.dias < 0) { cls = 'tag-erro'; texto = 'contrato venceu há ' + Math.abs(info.dias) + ' dia(s) (' + esc(L.fmtCurta(info.contratoFim)) + ')'; }
+      else if (info.dias <= 30) { cls = 'tag-aviso'; texto = 'rematrícula em ' + info.dias + ' dia(s) (' + esc(L.fmtCurta(info.contratoFim)) + ')'; }
+    }
+    return '<span class="tag ' + cls + '">' + texto + '</span>';
   }
   function viewAlunos() {
     let lista = S.alunos.slice();
@@ -794,15 +930,20 @@
       const q = L.norm(V.buscaAluno);
       lista = lista.filter(function (a) { return L.norm(a.nome).indexOf(q) > -1; });
     }
-    if (V.fPag) lista = lista.filter(function (a) { return (a.pagamento.status || 'desconhecido') === V.fPag; });
+    if (V.fPag === 'bolsista') lista = lista.filter(function (a) { return a.bolsista; });
+    else if (V.fPag === 'cancelamento') lista = lista.filter(function (a) { return a.cancelamento && a.cancelamento.solicitado; });
+    else if (V.fPag) lista = lista.filter(function (a) { return (a.pagamento.status || 'desconhecido') === V.fPag; });
     lista.sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
     const resumo = { 'em dia': 0, atrasado: 0, pendente: 0, desconhecido: 0 };
-    S.alunos.forEach(function (a) { const s = a.pagamento.status || 'desconhecido'; resumo[s] = (resumo[s] || 0) + 1; });
+    let nBolsistas = 0, nCancelamento = 0;
+    S.alunos.forEach(function (a) { const s = a.pagamento.status || 'desconhecido'; resumo[s] = (resumo[s] || 0) + 1; if (a.bolsista) nBolsistas++; if (a.cancelamento && a.cancelamento.solicitado) nCancelamento++; });
     return '<div class="topo"><h1>Alunos (' + S.alunos.length + ')</h1></div>' +
       '<div class="filtros">' +
       '<input type="search" placeholder="Buscar aluno por nome…" value="' + esc(V.buscaAluno) + '" data-act="busca-aluno">' +
       '<select data-act="filtro-pag"><option value="">Todos os pagamentos</option>' +
       ['em dia', 'pendente', 'atrasado', 'desconhecido'].map(function (s) { return '<option value="' + s + '"' + (V.fPag === s ? ' selected' : '') + '>' + s + ' (' + (resumo[s] || 0) + ')</option>'; }).join('') +
+      '<option value="bolsista"' + (V.fPag === 'bolsista' ? ' selected' : '') + '>bolsistas (' + nBolsistas + ')</option>' +
+      '<option value="cancelamento"' + (V.fPag === 'cancelamento' ? ' selected' : '') + '>cancelamento solicitado (' + nCancelamento + ')</option>' +
       '</select></div>' +
       '<table class="tabela"><thead><tr><th>Aluno</th><th>Turmas</th><th>Pagamento</th><th>Frequência</th><th>Rematrícula</th><th>Material</th><th></th></tr></thead><tbody>' +
       lista.map(function (a) {
@@ -810,7 +951,7 @@
         return '<tr>' +
           '<td><b>' + esc(a.nome) + '</b>' + (a.telefone ? ('<div class="muted">' + esc(a.telefone) + '</div>') : '') + '</td>' +
           '<td class="muted">' + esc(turmasTxt || '—') + '</td>' +
-          '<td>' + pagamentoBadge(a.pagamento.status) + '</td>' +
+          '<td>' + pagamentoBadge(a.pagamento.status) + (a.bolsista ? ' <span class="tag tag-aviso">Bolsista</span>' : '') + (a.cancelamento && a.cancelamento.solicitado ? ' <span class="tag tag-erro">Cancelamento solicitado</span>' : '') + '</td>' +
           '<td class="muted">' + Object.keys(a.frequencia || {}).length + ' registro(s)</td>' +
           '<td>' + (a.rematricula.enviada ? '<span class="tag tag-ok">Enviada</span>' : '<span class="tag tag-neutro">Não enviada</span>') + '</td>' +
           '<td>' + (a.materialDidatico.enviado ? '<span class="tag tag-ok">Enviado</span>' : '<span class="tag tag-neutro">Não enviado</span>') + '</td>' +
@@ -834,8 +975,21 @@
       '<div class="campo"><label>Telefone (WhatsApp)</label><input type="text" data-act="tel-aluno" data-id="' + a.id + '" value="' + esc(a.telefone || '') + '" placeholder="(21) 99999-9999"></div>' +
       '<div class="campo"><label>E-mail</label><input type="text" data-act="email-aluno" data-id="' + a.id + '" value="' + esc(a.email || '') + '" placeholder="nome@email.com"></div>' +
       '<div class="campo"><label>Onde paga</label><select data-act="forma-pagamento-aluno" data-id="' + a.id + '"><option value="asaas"' + (a.formaPagamento !== 'unidade' ? ' selected' : '') + '>Pelo Asaas</option><option value="unidade"' + (a.formaPagamento === 'unidade' ? ' selected' : '') + '>Na unidade (não entra na importação do Asaas)</option></select></div>' +
+      '<div class="campo"><label>Data que iniciou com a gente</label><input type="date" data-act="data-inicio-aluno" data-id="' + a.id + '" value="' + esc(a.dataInicio || '') + '"></div>' +
       '</div>' +
+      '<div class="check"><label><input type="checkbox" data-act="bolsista-aluno" data-id="' + a.id + '"' + (a.bolsista ? ' checked' : '') + '> Aluno bolsista (não entra na cobrança/inadimplência)</label></div>' +
+      '<div class="check"><label><input type="checkbox" data-act="livro-comprado-aluno" data-id="' + a.id + '"' + (a.livroDidatico.comprado ? ' checked' : '') + '> Já comprou o livro/material didático</label></div>' +
+      '<h3>Cancelamento</h3>' +
+      '<div class="check"><label><input type="checkbox" data-act="cancelamento-toggle" data-id="' + a.id + '"' + (a.cancelamento.solicitado ? ' checked' : '') + '> Aluno solicitou cancelamento</label></div>' +
+      (a.cancelamento.solicitado ? (
+        '<div class="campos-matricula">' +
+        '<div class="campo"><label>Data do pedido</label><input type="date" data-act="cancelamento-data" data-id="' + a.id + '" value="' + esc(a.cancelamento.data || '') + '"></div>' +
+        '<div class="campo"><label>Motivo</label><select data-act="cancelamento-motivo" data-id="' + a.id + '"><option value="">Selecione…</option>' +
+        MOTIVOS_CANCELAMENTO.map(function (m) { return '<option value="' + esc(m) + '"' + (a.cancelamento.motivo === m ? ' selected' : '') + '>' + esc(m) + '</option>'; }).join('') + '</select></div>' +
+        '</div>'
+      ) : '') +
       '<h3>Turmas</h3><ul>' + (a.turmas || []).map(function (t) { return '<li>' + esc(t.turma) + ' · ' + esc(t.semestre) + '</li>'; }).join('') + '</ul>' +
+      '<h3>Rematrícula</h3><p>' + tagRematricula(rematriculaInfoAluno(a)) + '</p>' +
       '<h3>Pagamento</h3><p>' + pagamentoBadge(a.pagamento.status) + (a.pagamento.obs ? (' <span class="muted">' + esc(a.pagamento.obs) + '</span>') : '') + '</p>' +
       '<div class="campos-matricula">' +
       '<div class="campo"><label>Situação manual</label><select data-act="pag-status" data-id="' + a.id + '">' +
@@ -853,7 +1007,11 @@
       (temTel ? '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemRematricula(a, a.turmas && a.turmas[0])) + '" data-act="marcar-rematricula" data-id="' + a.id + '">Rematrícula</a>' : '<span class="muted">Cadastre o telefone para habilitar</span>') +
       (temTel ? '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemMaterialDidatico(a, a.turmas && a.turmas[0], a.livroDidatico.qual)) + '" data-act="marcar-material" data-id="' + a.id + '">Material didático</a>' : '') +
       (temTel ? '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemCobranca(a)) + '">Cobrança</a>' : '') +
-      '</div></div></article>');
+      '</div>' +
+      '<h3>Excluir aluno</h3>' +
+      '<p class="muted">Use para alunos que saíram, duplicados, ou cadastros criados por engano. O histórico de matrícula não é apagado (continua guardando o nome), só o cadastro do aluno e a ligação dele com as turmas.</p>' +
+      '<div class="ct-acoes"><button class="btn sm" type="button" data-act="excluir-aluno" data-id="' + a.id + '">Excluir aluno</button></div>' +
+      '</div></article>');
   }
 
   /* ---------- Conferência ---------- */
@@ -984,6 +1142,12 @@
     fechar: function () { fecharDlg(); },
     semestre: function (el) { V.semestre = el.dataset.s; render(); },
     'semana-nav': function (el) { const d = Number(el.dataset.d); V.semanaOffset = d === 0 ? 0 : V.semanaOffset + d; render(); },
+    'semana-prof-toggle': function (el) {
+      const nome = el.dataset.prof;
+      if (V.semProfsOcultos[nome]) delete V.semProfsOcultos[nome]; else V.semProfsOcultos[nome] = true;
+      render();
+    },
+    'semana-prof-limpar': function () { V.semProfsOcultos = {}; render(); },
     'ir-aba': function (el) { V.view = el.dataset.view; render(); },
     'filtro-sit': function (el) { V.fSit = el.value; render(); },
     'filtro-pag': function (el) { V.fPag = el.value; render(); },
@@ -1022,13 +1186,58 @@
       render();
     },
     'pag-status': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.pagamento.status = el.value; a.pagamento.atualizadoEm = new Date().toISOString(); LS.set('alunos', S.alunos); registrar('Atualizou pagamento (manual)', a.nome + ' → ' + el.value); } },
+    'bolsista-aluno': function (el) {
+      const a = D.alunoPorId[el.dataset.id];
+      if (!a) return;
+      a.bolsista = el.checked;
+      LS.set('alunos', S.alunos);
+      registrar('Atualizou bolsista', a.nome + ' → ' + (a.bolsista ? 'bolsista' : 'não bolsista'));
+      render();
+    },
+    'excluir-aluno': function (el) {
+      const a = D.alunoPorId[el.dataset.id];
+      if (!a) return;
+      if (typeof confirm === 'function' && !confirm('Excluir o cadastro de "' + a.nome + '"? As matrículas e compromissos já registrados continuam guardando o nome dele, mas ele sai das turmas e da lista de alunos.')) return;
+      S.alunos = S.alunos.filter(function (x) { return x.id !== a.id; });
+      S.turmas.forEach(function (t) {
+        t.alunosNomes = (t.alunosNomes || []).filter(function (n) { return L.norm(n.replace(/\s*[\(\*].*$/, '').replace(/\*$/, '')) !== L.norm(a.nome); });
+      });
+      LS.set('alunos', S.alunos); LS.set('turmas', S.turmas);
+      registrar('Excluiu aluno', a.nome);
+      fecharDlg();
+      recalc(); render();
+      toast('Aluno excluído.');
+    },
     'marcar-rematricula': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.rematricula.enviada = true; a.rematricula.data = new Date().toISOString(); LS.set('alunos', S.alunos); registrar('Marcou mensagem de rematrícula como enviada', a.nome); } },
     'marcar-material': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.materialDidatico.enviado = true; a.materialDidatico.data = new Date().toISOString(); LS.set('alunos', S.alunos); registrar('Marcou material didático como enviado', a.nome); } },
     'salvar-autor': function (el) { S.cfg.autor = el.value; LS.set('cfg', S.cfg); },
     'forma-pagamento-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.formaPagamento = el.value; LS.set('alunos', S.alunos); registrar('Definiu forma de pagamento', a.nome + ' → ' + el.value); render(); } },
     'livro-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.livroDidatico.qual = el.value; LS.set('alunos', S.alunos); } },
+    'data-inicio-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.dataInicio = el.value; LS.set('alunos', S.alunos); } },
+    'livro-comprado-aluno': function (el) {
+      const a = D.alunoPorId[el.dataset.id];
+      if (!a) return;
+      a.livroDidatico.comprado = el.checked;
+      LS.set('alunos', S.alunos);
+      registrar('Atualizou livro comprado', a.nome + ' → ' + (a.livroDidatico.comprado ? 'comprou' : 'ainda não comprou'));
+    },
+    'cancelamento-toggle': function (el) {
+      const a = D.alunoPorId[el.dataset.id];
+      if (!a) return;
+      a.cancelamento.solicitado = el.checked;
+      if (el.checked && !a.cancelamento.data) a.cancelamento.data = HOJE;
+      LS.set('alunos', S.alunos);
+      registrar('Atualizou cancelamento', a.nome + ' → ' + (a.cancelamento.solicitado ? 'solicitou cancelamento' : 'cancelamento removido'));
+      // render() atualiza a tabela de Alunos por baixo (a tag "Cancelamento solicitado"); como
+      // render() nunca toca no <dialog>, reabrimos o cadastro também, para os campos de data/motivo
+      // aparecerem ou somerem na hora.
+      render();
+      dlgAluno(a.id);
+    },
+    'cancelamento-data': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cancelamento.data = el.value; LS.set('alunos', S.alunos); } },
+    'cancelamento-motivo': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cancelamento.motivo = el.value; LS.set('alunos', S.alunos); registrar('Definiu motivo de cancelamento', a.nome + ' → ' + el.value); } },
     'baixar-data': function () {
-      const payload = { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas };
+      const payload = { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados };
       baixar('data.js', 'window.WASH_DATA = ' + JSON.stringify(payload, null, 1) + ';\n', 'text/javascript;charset=utf-8');
       toast('data.js baixado');
     },
@@ -1085,7 +1294,7 @@
         const nome = (nm.alunoNome || '').trim();
         if (!nome) { toast('Informe o nome do aluno ou escolha um já cadastrado.'); return; }
         aluno = {
-          id: proxId('al', S.alunos), nome: nome, telefone: '', turmas: [], formaPagamento: nm.formaPagamento || 'asaas',
+          id: proxId('al', S.alunos), nome: nome, telefone: '', email: '', turmas: [], formaPagamento: nm.formaPagamento || 'asaas', bolsista: false,
           pagamento: { status: 'desconhecido', obs: '', atualizadoEm: '', valorEmAberto: '' }, frequencia: {},
           materialDidatico: { enviado: false, data: '', obs: '' }, rematricula: { enviada: false, data: '', obs: '' },
           livroDidatico: { qual: '', comprado: false, mensagemEnviada: false },
@@ -1216,7 +1425,7 @@
     'mat-turma': function (el) { V.novoMaterial.turmaNome = el.value; },
     'mat-semestre': function (el) { V.novoMaterial.semestre = el.value; },
     'mat-recebido': function (el) { V.novoMaterial.recebidoEm = el.value; },
-    'mat-pago': function (el) { V.novoMaterial.pagoWashington = el.checked; },
+    'mat-pago': function (el) { V.novoMaterial.pagoWashington = el.checked; render(); },
     'mat-obs': function (el) { V.novoMaterial.obs = el.value; },
     'add-material': function () {
       const nm = V.novoMaterial;
@@ -1301,7 +1510,7 @@
     'de-categoria': function (el) { V.novaDespesa.categoria = el.value; },
     'de-valor': function (el) { V.novaDespesa.valor = el.value; },
     'de-pagopor': function (el) { V.novaDespesa.pagoPor = el.value; },
-    'de-pago': function (el) { V.novaDespesa.pago = el.checked; },
+    'de-pago': function (el) { V.novaDespesa.pago = el.checked; render(); },
     'de-obs': function (el) { V.novaDespesa.obs = el.value; },
     'filtro-mes-despesas': function (el) { V.fMesDespesas = el.value; render(); },
     'add-despesa': function () {
@@ -1338,6 +1547,68 @@
       registrar('Excluiu despesa', d.descricao);
       render();
     },
+    /* ---- Pendências ---- */
+    'pend-texto': function (el) { V.novaPendencia.texto = el.value; },
+    'pend-aluno': function (el) { V.novaPendencia.alunoId = el.value; },
+    'pend-turma': function (el) { V.novaPendencia.turmaId = el.value; },
+    'pend-prazo': function (el) { V.novaPendencia.prazo = el.value; },
+    'add-pendencia': function () {
+      const np = V.novaPendencia;
+      if (!np.texto.trim()) { toast('Escreva o que precisa ser feito.'); return; }
+      const p = { id: proxId('pend', S.pendencias), texto: np.texto.trim(), alunoId: np.alunoId, turmaId: np.turmaId, prazo: np.prazo, resolvida: false, criadaEm: new Date().toISOString() };
+      S.pendencias.push(p);
+      LS.set('pendencias', S.pendencias);
+      registrar('Criou pendência', p.texto);
+      V.novaPendencia = { texto: '', alunoId: '', turmaId: '', prazo: '' };
+      render();
+    },
+    'pendencia-toggle': function (el) {
+      const p = S.pendencias.find(function (x) { return x.id === el.dataset.id; });
+      if (!p) return;
+      p.resolvida = el.checked;
+      LS.set('pendencias', S.pendencias);
+      registrar('Atualizou pendência', p.texto + ' → ' + (p.resolvida ? 'resolvida' : 'reaberta'));
+      render();
+    },
+    'excluir-pendencia': function (el) {
+      const p = S.pendencias.find(function (x) { return x.id === el.dataset.id; });
+      if (!p) return;
+      S.pendencias = S.pendencias.filter(function (x) { return x.id !== p.id; });
+      LS.set('pendencias', S.pendencias);
+      registrar('Excluiu pendência', p.texto);
+      render();
+    },
+    'filtro-pendencia': function (el) { V.fPendencia = el.value; render(); },
+    /* ---- Comunicados ---- */
+    'com-turma': function (el) { V.novoComunicado.turmaId = el.value; },
+    'com-mensagem': function (el) { V.novoComunicado.mensagem = el.value; },
+    'gerar-comunicado': function () {
+      const nc = V.novoComunicado;
+      if (!nc.mensagem.trim()) { toast('Escreva a mensagem do comunicado.'); return; }
+      const c = { id: proxId('com', S.comunicados), data: HOJE, turmaId: nc.turmaId, mensagem: nc.mensagem.trim(), enviados: {}, criadoEm: new Date().toISOString() };
+      S.comunicados.push(c);
+      LS.set('comunicados', S.comunicados);
+      registrar('Criou comunicado', (c.turmaId ? (D.turmaPorId[c.turmaId] || {}).turma : 'todos') + ' · ' + c.mensagem.slice(0, 60));
+      V.novoComunicado = { mensagem: '', turmaId: '' };
+      render();
+    },
+    'comunicado-marcar-enviado': function (el) {
+      const c = S.comunicados.find(function (x) { return x.id === el.dataset.com; });
+      if (!c) return;
+      c.enviados = c.enviados || {};
+      c.enviados[el.dataset.aluno] = true;
+      LS.set('comunicados', S.comunicados);
+      render();
+    },
+    'excluir-comunicado': function (el) {
+      const c = S.comunicados.find(function (x) { return x.id === el.dataset.id; });
+      if (!c) return;
+      if (typeof confirm === 'function' && !confirm('Excluir este comunicado?')) return;
+      S.comunicados = S.comunicados.filter(function (x) { return x.id !== c.id; });
+      LS.set('comunicados', S.comunicados);
+      registrar('Excluiu comunicado', c.mensagem.slice(0, 60));
+      render();
+    },
     /* ---- Login ---- */
     'login-email': function (el) { V.loginEmail = el.value; },
     'login-senha': function (el) { V.loginSenha = el.value; },
@@ -1360,8 +1631,17 @@
   document.addEventListener('click', function (e) {
     const el = e.target.closest('[data-act]');
     if (!el || !ACTS[el.dataset.act]) return;
-    if (el.tagName === 'A') { /* deixa o link abrir normalmente (WhatsApp/Google Agenda) e ainda roda a ação de marcação, se houver */ }
-    else e.preventDefault();
+    const tag = el.tagName;
+    // <select>, campos de texto/data e <textarea> já são tratados pelos eventos 'input'/'change' logo
+    // abaixo. Interceptar o clique neles (e cancelar o padrão do navegador) é o que fazia a lista,
+    // o calendário ou o seletor de arquivo não abrirem de primeira — exigindo "apertar forte"/tocar
+    // de novo. Checkbox e radio continuam passando por aqui, pois são eles que disparam a ação.
+    if (tag === 'SELECT' || tag === 'TEXTAREA' || (tag === 'INPUT' && el.type !== 'checkbox' && el.type !== 'radio')) return;
+    if (tag === 'A' || (tag === 'INPUT' && (el.type === 'checkbox' || el.type === 'radio'))) {
+      /* deixa o navegador fazer o padrão (abrir o link, marcar/desmarcar a caixinha) e ainda roda a ação */
+    } else {
+      e.preventDefault();
+    }
     ACTS[el.dataset.act](el);
   });
   document.addEventListener('change', function (e) {
@@ -1370,7 +1650,7 @@
   });
   document.addEventListener('input', function (e) {
     const el = e.target.closest('[data-act]');
-    if (el && ACTS[el.dataset.act] && el.tagName === 'INPUT' && el.type !== 'file') ACTS[el.dataset.act](el);
+    if (el && ACTS[el.dataset.act] && (el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type !== 'file'))) ACTS[el.dataset.act](el);
   });
   document.addEventListener('click', function (e) {
     const navBtn = e.target.closest('.nav-item');
@@ -1386,7 +1666,7 @@
   /* ---------- Sincronização entre navegadores ---------- */
   function aplicarRemoto(dados) {
     let mudou = false;
-    ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas'].forEach(function (k) {
+    ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados'].forEach(function (k) {
       if (dados[k] !== undefined) { S[k] = dados[k]; LS.setLocal(k, dados[k]); mudou = true; }
     });
     if (mudou) { recalc(); render(); }
@@ -1394,7 +1674,7 @@
   recalc();
 
   function estadoAtualParaSemear() {
-    return { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, cfg: S.cfg, log: S.log, asaasImportado: S.asaasImportado, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas };
+    return { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, cfg: S.cfg, log: S.log, asaasImportado: S.asaasImportado, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados };
   }
 
   let syncIniciado = false;

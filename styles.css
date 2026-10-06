@@ -21,7 +21,8 @@
   --neutro-soft: #eceff2;
   --radius: 10px;
   --font-display: 'Bricolage Grotesque', 'Segoe UI', system-ui, sans-serif;
-  --font-body: 'Instrument Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-body: 'Atkinson Hyperlegible', 'Instrument Sans', 'Segoe UI', system-ui, -apple-system, sans-serif;
+  --font-mono: 'JetBrains Mono', 'Courier New', monospace;
 }
 * { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; }
@@ -99,15 +100,21 @@ textarea { resize: vertical; font-family: inherit; }
 .grade-col.hoje .grade-col-h { background: var(--brand); color: #fff; }
 .grade-col.hoje .grade-col-data { color: #dbe8fb; }
 .grade-col.hoje { box-shadow: inset 0 0 0 2px var(--brand); }
-.grade-item { padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--line-2); cursor: pointer; }
+.grade-item { padding: 0.5rem 0.7rem; border-bottom: 1px solid var(--line-2); border-left: 3px solid var(--pc, var(--line)); cursor: pointer; transition: opacity 0.15s; }
 .grade-item:hover { background: #f7fafd; }
 .grade-item:last-child { border-bottom: 0; }
-.grade-item.compromisso { background: var(--brand-soft); }
+.grade-item.compromisso { background: var(--brand-soft); border-left-color: var(--brand); }
 .grade-item.compromisso:hover { background: #cfe0f7; }
-.gi-hora { font-size: 0.72rem; font-weight: 700; color: var(--brand-strong); }
+.grade-item.dim { opacity: 0.3; }
+.gi-hora { font-size: 0.72rem; font-weight: 700; color: var(--brand-strong); font-family: var(--font-mono); }
 .gi-turma { font-weight: 600; }
 .gi-prof { font-size: 0.78rem; color: var(--ink-2); }
 .grade-vazio { padding: 0.6rem 0.7rem; color: var(--ink-3); font-size: 0.82rem; }
+.legenda-profs { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 0.9rem; }
+.legenda-dica { font-size: 0.8rem; margin-right: 0.2rem; }
+.legenda-prof { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid var(--line); background: var(--card); padding: 0.25rem 0.6rem; border-radius: 99px; font-size: 0.78rem; font-weight: 600; color: var(--ink); }
+.legenda-prof.off { opacity: 0.4; }
+.legenda-bolha { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--pc); flex: none; }
 @media (max-width: 900px) { .grade { grid-template-columns: repeat(7, 11rem); } }
 
 /* Cards de turma */
@@ -127,6 +134,14 @@ textarea { resize: vertical; font-family: inherit; }
 .lista-avisos { display: grid; gap: 0.6rem; }
 .aviso { padding: 0.7rem 0.9rem; border-radius: 8px; border-left: 4px solid var(--erro); background: var(--erro-soft); }
 .aviso-atencao { border-left-color: var(--warn); background: var(--warn-soft); }
+
+/* Pendências */
+.lista-pendencias { display: grid; gap: 0.5rem; }
+.pendencia { display: flex; align-items: flex-start; gap: 0.6rem; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.6rem 0.8rem; flex-wrap: wrap; }
+.pendencia.resolvida { opacity: 0.55; }
+.pendencia.resolvida b { text-decoration: line-through; }
+.pendencia .check { margin: 0; flex: 1; min-width: 12rem; }
+.pendencia .check label { align-items: flex-start; }
 
 /* Blocos (Dados) */
 .bloco { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.1rem 1.2rem; }

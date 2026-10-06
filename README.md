@@ -82,7 +82,8 @@ Essas três abas substituem as planilhas separadas de controle de material, entr
 
 ## Abas do painel
 
-- **Semana**: calendário com as datas reais da semana (SEG a DOM), já mostrando o semestre certo conforme a data. Use "Semana anterior" / "Hoje" / "Próxima semana" para navegar. Clique numa aula para ver a lista de alunos e baixar o calendário dela.
+- **Semana**: calendário com as datas reais da semana (SEG a DOM), já mostrando o semestre certo conforme a data. Use "Semana anterior" / "Hoje" / "Próxima semana" para navegar. Cada aula ganhou uma cor de acordo com o(a) professor(a) — clique no nome dele(a) na legenda acima da grade para destacar só as aulas dele(a) e apagar visualmente o resto, útil nos dias com muitas turmas. Clique numa aula para ver a lista de alunos e baixar o calendário dela.
+- **Pendências**: lista do que precisa ser resolvido na unidade (documento, ligação, contrato pendente etc.), podendo ligar cada item a um aluno e/ou turma e dar um prazo, para nada passar batido.
 - **Turmas**: lista completa, filtrável por situação (Em andamento, Em formação, Finalizada, Não formou turma etc.), com os mesmos botões de calendário.
 - **Matrículas**: onde a equipe registra cada matrícula fechada — veja a seção própria abaixo.
 - **Compromissos**: agenda de reuniões e compromissos avulsos (pais, responsáveis, equipe) — veja a seção própria acima.
@@ -91,7 +92,8 @@ Essas três abas substituem as planilhas separadas de controle de material, entr
 - **Material**: controle de pedido/entrega de material didático por aluno — veja a seção própria acima.
 - **Entradas**: lançamento de dinheiro recebido (mensalidades, material, matrícula etc.) — veja a seção própria acima.
 - **Despesas**: lançamento de gastos do curso, por categoria — veja a seção própria acima.
-- **Alunos**: lista de todos os alunos matriculados, com situação de pagamento, quantos registros de frequência já tem, e se já recebeu mensagem de rematrícula/material didático. Busque por nome e filtre por situação de pagamento. Clique em "Abrir" para ver o cadastro completo (incluindo onde o aluno paga e qual livro didático ele precisa) e preparar mensagens de WhatsApp.
+- **Alunos**: lista de todos os alunos matriculados, com situação de pagamento, quantos registros de frequência já tem, e se já recebeu mensagem de rematrícula/material didático. Busque por nome e filtre por situação de pagamento (inclusive "cancelamento solicitado"). Clique em "Abrir" para ver o cadastro completo — data em que o aluno começou com a gente, data de rematrícula (calculada a partir do contrato da matrícula), se já comprou o livro didático, e se solicitou cancelamento (com data e motivo) — e preparar mensagens de WhatsApp.
+- **Comunicados**: escreva um aviso e dispare por WhatsApp para todos os alunos de uma turma (ou para todos com telefone cadastrado), acompanhando quem já recebeu.
 - **Professores**: cadastro de telefone de cada professor(a), com botão para chamar no WhatsApp.
 - **Conferência**: aponta automaticamente choques de horário do mesmo professor ou da mesma sala **dentro do mesmo semestre** (turmas de 2026.1 e 2026.2 não acontecem ao mesmo tempo, então não são comparadas entre si), além de turmas em andamento sem sala definida.
 - **Buscar**: procura turma, professor, sala ou aluno ao mesmo tempo.
@@ -123,6 +125,8 @@ A partir dos relatórios do Asaas (maio a setembro) e da planilha de "Relatório
 - **30 marcados como "paga na unidade"** (vieram do Relatório de Entradas e não têm registro no Asaas).
 
 Os outros alunos ficaram como "desconhecido" — a maioria porque o nome que paga (geralmente o responsável) é diferente do nome do aluno na turma e não deu pra cruzar com segurança. Vale revisar esses manualmente em Alunos, marcando "Onde paga" e a situação.
+
+**Bolsista, aluno que saiu, ou cadastro duplicado**: em **Alunos › Abrir**, agora tem um campo **Aluno bolsista** — marcando essa caixinha, o aluno some da aba Inadimplência e ganha uma etiqueta "Bolsista" na lista (pra equipe não ficar cobrando quem não paga mensalidade). Tem também um filtro "bolsistas" na busca de Alunos pra ver só eles. E pra aluno que já saiu da escola, duplicado, ou cadastro feito por engano, tem o botão **Excluir aluno** no fim do mesmo cadastro — ele sai da lista e das turmas, mas o histórico de matrícula/compromissos já registrado continua guardando o nome dele.
 
 ## Pagamentos: importar relatório do Asaas
 
