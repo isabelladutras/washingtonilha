@@ -312,8 +312,13 @@
   function viewSemana() {
     const segunda = L.somaDias(L.segundaDaSemana(HOJE), V.semanaOffset * 7);
     const semestreSemana = L.semestreDeData(segunda);
-    const turmasDoSemestre = S.turmas.filter(function (t) { return t.semestre === semestreSemana && t.situacao !== 'A confirmar'; });
-    const confirmar = S.turmas.filter(function (t) { return t.semestre === semestreSemana && t.situacao === 'A confirmar'; });
+    const turmasDoSemestreTodas = S.turmas.filter(function (t) { return t.semestre === semestreSemana && t.situacao !== 'A confirmar'; });
+    // Turma sem nenhum aluno ainda matriculado não ajuda a enxergar a rotina da semana (e ainda
+    // mais com muitas turmas no dia, ela só disputa espaço visual) — deixamos essas só na lista
+    // "Turmas em formação" logo abaixo da grade, junto com as que estão "A confirmar".
+    const turmasDoSemestre = turmasDoSemestreTodas.filter(function (t) { return (t.alunosNomes || []).length > 0; });
+    const semAluno = turmasDoSemestreTodas.filter(function (t) { return (t.alunosNomes || []).length === 0; });
+    const confirmar = S.turmas.filter(function (t) { return t.semestre === semestreSemana && t.situacao === 'A confirmar'; }).concat(semAluno);
     D.profsOrdenados = Array.from(new Set(turmasDoSemestre.map(function (t) { return t.professor || '—'; }))).sort();
     const grade = L.gradeSemanal(turmasDoSemestre);
     const diasSemana = L.DIAS_ORDEM.map(function (d, i) { return { id: d, data: L.somaDias(segunda, i) }; });
@@ -349,7 +354,7 @@
       '<p class="muted">' + esc(faixa) + '</p>' +
       (D.profsOrdenados.length > 1 ? ('<div class="legenda-profs"><span class="muted legenda-dica">Clique para destacar só as turmas de um(a) professor(a):</span>' + legenda + (Object.keys(V.semProfsOcultos).length ? '<button class="btn sm" type="button" data-act="semana-prof-limpar">Mostrar todos</button>' : '') + '</div>') : '') +
       '<div class="grade">' + colunas + '</div>' +
-      (confirmar.length ? ('<h2 class="subtitulo">Turmas a confirmar (' + confirmar.length + ')</h2><div class="lista-cards">' + confirmar.map(function (t) { return cardTurma(t); }).join('') + '</div>') : '');
+      (confirmar.length ? ('<h2 class="subtitulo">Turmas em formação (' + confirmar.length + ')</h2><p class="muted">A confirmar ou ainda sem nenhum aluno matriculado — por isso não aparecem na grade acima.</p><div class="lista-cards">' + confirmar.map(function (t) { return cardTurma(t); }).join('') + '</div>') : '');
   }
 
   /* ---------- Turmas ---------- */
@@ -714,7 +719,7 @@
   function mesesDisponiveis(lista) { return Array.from(new Set(lista.map(function (x) { return mesDeData(x.data); }).filter(Boolean))).sort().reverse(); }
   function linhaEntrada(e) {
     return '<tr>' +
-      '<td>' + esc(L.fmtCurta(e.data)) + '</td>' +
+      '<td><input type="date" data-act="en-editar-data" data-id="' + e.id + '" value="' + esc(e.data || '') + '"></td>' +
       '<td><b>' + esc(e.alunoNome || '—') + '</b></td>' +
       '<td>' + esc(fmtReais(e.valor) || '—') + '</td>' +
       '<td>' + esc(e.formaPagamento || '—') + '</td>' +
@@ -760,7 +765,7 @@
   }
   function linhaDespesa(d) {
     return '<tr>' +
-      '<td>' + esc(L.fmtCurta(d.data)) + '</td>' +
+      '<td><input type="date" data-act="de-editar-data" data-id="' + d.id + '" value="' + esc(d.data || '') + '"></td>' +
       '<td><b>' + esc(d.descricao) + '</b>' + (d.obs ? ('<div class="muted">' + esc(d.obs) + '</div>') : '') + '</td>' +
       '<td>' + esc(d.categoria || '—') + '</td>' +
       '<td>' + esc(fmtReais(d.valor) || '—') + '</td>' +
@@ -1504,6 +1509,15 @@
       registrar('Excluiu entrada', e.alunoNome || '—');
       render();
     },
+    /* Corrige a data de um lançamento já registrado (comum quando a equipe lança com atraso). */
+    'en-editar-data': function (el) {
+      const e = S.entradas.find(function (x) { return x.id === el.dataset.id; });
+      if (!e || !el.value) return;
+      e.data = el.value;
+      LS.set('entradas', S.entradas);
+      registrar('Corrigiu data de entrada', (e.alunoNome || '—') + ' → ' + el.value);
+      render();
+    },
     /* ---- Despesas ---- */
     'de-data': function (el) { V.novaDespesa.data = el.value; },
     'de-descricao': function (el) { V.novaDespesa.descricao = el.value; },
@@ -1545,6 +1559,15 @@
       S.despesas = S.despesas.filter(function (x) { return x.id !== d.id; });
       LS.set('despesas', S.despesas);
       registrar('Excluiu despesa', d.descricao);
+      render();
+    },
+    /* Corrige a data de uma despesa já registrada (comum quando a equipe lança com atraso). */
+    'de-editar-data': function (el) {
+      const d = S.despesas.find(function (x) { return x.id === el.dataset.id; });
+      if (!d || !el.value) return;
+      d.data = el.value;
+      LS.set('despesas', S.despesas);
+      registrar('Corrigiu data de despesa', d.descricao + ' → ' + el.value);
       render();
     },
     /* ---- Pendências ---- */
