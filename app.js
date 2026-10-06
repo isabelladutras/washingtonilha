@@ -47,13 +47,28 @@
     comunicados: LS.get('comunicados', []),
   };
 
-  /* ---------- Garante que alunos já salvos antes destes campos existirem não quebrem o painel ---------- */
-  S.alunos.forEach(function (a) {
-    if (a.dataInicio == null) a.dataInicio = '';
-    if (!a.cancelamento) a.cancelamento = { solicitado: false, data: '', motivo: '' };
-    if (!a.livroDidatico) a.livroDidatico = { qual: '', comprado: false, mensagemEnviada: false };
-    else if (a.livroDidatico.comprado == null) a.livroDidatico.comprado = false;
-  });
+  /* ---------- Garante que alunos já salvos (ou sincronizados de outro navegador) antes destes
+     campos existirem não quebrem o painel. Importante: isso tem que rodar não só na carga inicial,
+     mas TODA VEZ que dados de alunos chegarem pela sincronização entre navegadores também — senão,
+     o cadastro de um aluno sincronizado de um aparelho que ainda não tinha essas abas quebra a
+     tela ao abrir ("Abrir" parece não fazer nada). ---------- */
+  function normalizarAlunos(lista) {
+    (lista || []).forEach(function (a) {
+      if (a.dataInicio == null) a.dataInicio = '';
+      if (!a.cancelamento) a.cancelamento = { solicitado: false, data: '', motivo: '' };
+      else {
+        if (a.cancelamento.solicitado == null) a.cancelamento.solicitado = false;
+        if (a.cancelamento.data == null) a.cancelamento.data = '';
+        if (a.cancelamento.motivo == null) a.cancelamento.motivo = '';
+      }
+      if (!a.livroDidatico) a.livroDidatico = { qual: '', comprado: false, mensagemEnviada: false };
+      else if (a.livroDidatico.comprado == null) a.livroDidatico.comprado = false;
+      if (a.bolsista == null) a.bolsista = false;
+      if (a.email == null) a.email = '';
+    });
+    return lista;
+  }
+  normalizarAlunos(S.alunos);
 
   /* ---------- Migração: traz dados novos (ex.: telefone/e-mail importados) sem apagar edições manuais ---------- */
   (function migrarDadosPadrao() {
@@ -1690,7 +1705,12 @@
   function aplicarRemoto(dados) {
     let mudou = false;
     ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados'].forEach(function (k) {
-      if (dados[k] !== undefined) { S[k] = dados[k]; LS.setLocal(k, dados[k]); mudou = true; }
+      if (dados[k] !== undefined) {
+        S[k] = dados[k];
+        if (k === 'alunos') normalizarAlunos(S.alunos);
+        LS.setLocal(k, S[k]);
+        mudou = true;
+      }
     });
     if (mudou) { recalc(); render(); }
   }
