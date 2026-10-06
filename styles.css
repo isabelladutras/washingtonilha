@@ -140,6 +140,10 @@ textarea { resize: vertical; font-family: inherit; }
 .pendencia { display: flex; align-items: flex-start; gap: 0.6rem; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.6rem 0.8rem; flex-wrap: wrap; }
 .pendencia.resolvida { opacity: 0.55; }
 .pendencia.resolvida b { text-decoration: line-through; }
+
+/* Aluno cancelado: continua na lista/turma (histórico), mas visualmente esmaecido e riscado */
+.linha-cancelada { opacity: 0.6; }
+.linha-cancelada b { text-decoration: line-through; }
 .pendencia .check { margin: 0; flex: 1; min-width: 12rem; }
 .pendencia .check label { align-items: flex-start; }
 

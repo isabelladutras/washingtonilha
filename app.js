@@ -26,7 +26,7 @@
     professores: LS.get('professores', null) || (DATA.professores || []).map(function (p) { return Object.assign({}, p); }),
     turmas: LS.get('turmas', null) || (DATA.turmas || []).map(function (t) { return Object.assign({}, t); }),
     alunos: alunosSalvos || (DATA.alunos || []).map(function (a) {
-      return Object.assign({ formaPagamento: 'desconhecido', email: '', bolsista: false, dataInicio: '' }, a, {
+      return Object.assign({ formaPagamento: 'desconhecido', email: '', bolsista: false, cancelado: false, dataInicio: '' }, a, {
         pagamento: Object.assign({ valorEmAberto: '' }, a.pagamento), frequencia: Object.assign({}, a.frequencia),
         materialDidatico: Object.assign({}, a.materialDidatico), rematricula: Object.assign({}, a.rematricula),
         livroDidatico: Object.assign({ qual: '', comprado: false, mensagemEnviada: false }, a.livroDidatico),
@@ -64,6 +64,7 @@
       if (!a.livroDidatico) a.livroDidatico = { qual: '', comprado: false, mensagemEnviada: false };
       else if (a.livroDidatico.comprado == null) a.livroDidatico.comprado = false;
       if (a.bolsista == null) a.bolsista = false;
+      if (a.cancelado == null) a.cancelado = false;
       if (a.email == null) a.email = '';
     });
     return lista;
@@ -406,7 +407,7 @@
       (t.obs ? ('<p class="muted">Obs.: ' + esc(t.obs) + '</p>') : '') +
       '<h3>Alunos (' + alunosDaTurma.length + ')</h3>' +
       (alunosDaTurma.length ? ('<ul class="lista-alunos">' + alunosDaTurma.map(function (x) {
-        return '<li class="aluno-turma-linha"><div>' + esc(x.aluno ? x.aluno.nome : x.nomeRaw) + (x.aluno && x.aluno.telefone ? ('<span class="muted"> · ' + esc(x.aluno.telefone) + '</span>') : (!x.aluno ? '<span class="muted"> · sem cadastro de aluno</span>' : '')) + '</div>' +
+        return '<li class="aluno-turma-linha' + (x.aluno && x.aluno.cancelado ? ' linha-cancelada' : '') + '"><div>' + esc(x.aluno ? x.aluno.nome : x.nomeRaw) + (x.aluno && x.aluno.cancelado ? ' <span class="tag tag-erro">Cancelado</span>' : '') + (x.aluno && x.aluno.telefone ? ('<span class="muted"> · ' + esc(x.aluno.telefone) + '</span>') : (!x.aluno ? '<span class="muted"> · sem cadastro de aluno</span>' : '')) + '</div>' +
           '<div class="aluno-turma-acoes">' +
           (x.aluno ? '<button class="link" type="button" data-act="ver-aluno" data-id="' + x.aluno.id + '">ver cadastro</button>' : '') +
           (x.aluno && x.aluno.telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(x.aluno.telefone, '') + '">WhatsApp</a>') : '') +
@@ -478,7 +479,34 @@
       '<div class="campo"><label>Livro didático</label><input type="text" data-act="livro-matricula" data-id="' + m.id + '" value="' + esc(m.livro || '') + '" placeholder="Qual livro o aluno precisa comprar"></div>' +
       '<div class="ct-acoes">' +
       (D.alunoPorId[m.alunoId] && D.alunoPorId[m.alunoId].telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(D.alunoPorId[m.alunoId].telefone, L.mensagemMaterialDidatico(D.alunoPorId[m.alunoId], t, m.livro)) + '">Avisar sobre o livro</a>') : '<span class="muted">Cadastre o telefone do aluno para avisar sobre o livro</span>') +
+      '<button class="btn sm" type="button" data-act="editar-matricula" data-id="' + m.id + '">Editar matrícula</button>' +
+      '<button class="btn sm" type="button" data-act="excluir-matricula" data-id="' + m.id + '">Excluir matrícula</button>' +
       '</div></div>';
+  }
+
+  /* Edição de uma matrícula já lançada (corrige erro de preenchimento num rascunho, por exemplo). */
+  function dlgEditarMatricula(id) {
+    const m = D.matriculaPorId[id];
+    if (!m) return;
+    abrirDlg('<article class="dlg-card"><header><h2>Editar matrícula — ' + esc(m.alunoNome) + '</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header>' +
+      '<div class="dlg-corpo">' +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Turma</label><select id="em-turma">' + S.turmas.slice().sort(function (a, b) { return L.norm(a.turma).localeCompare(L.norm(b.turma)); })
+        .map(function (t) { return '<option value="' + t.id + '"' + (m.turmaId === t.id ? ' selected' : '') + '>' + esc(t.turma) + ' · ' + esc(t.semestre) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="campo"><label>Data de início</label><input type="date" id="em-data" value="' + esc(m.dataInicio) + '"></div>' +
+      '<div class="campo"><label>Data de pagamento</label><input type="date" id="em-data-pagamento" value="' + esc(m.dataPagamento || '') + '"></div>' +
+      '<div class="campo"><label>Pagamento</label><select id="em-pagamento"><option value="asaas"' + (m.formaPagamento !== 'unidade' ? ' selected' : '') + '>Pelo Asaas</option><option value="unidade"' + (m.formaPagamento === 'unidade' ? ' selected' : '') + '>Na unidade</option></select></div>' +
+      '<div class="campo"><label>Valor da mensalidade (R$)</label><input type="text" inputmode="decimal" id="em-valor-mensalidade" value="' + esc(m.valorMensalidade || '') + '"></div>' +
+      '<div class="campo"><label>Livro didático (qual)</label><input type="text" id="em-livro" value="' + esc(m.livro || '') + '"></div>' +
+      '<div class="campo"><label>Valor do material (R$)</label><input type="text" inputmode="decimal" id="em-valor-material" value="' + esc(m.valorMaterial || '') + '"></div>' +
+      '</div>' +
+      '<div class="check"><label><input type="checkbox" id="em-desconto-tem"' + (m.desconto && m.desconto.tem ? ' checked' : '') + '> Teve desconto especial no primeiro mês</label></div>' +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Valor com desconto (R$)</label><input type="text" inputmode="decimal" id="em-desconto-valor" value="' + esc(m.desconto ? (m.desconto.valor || '') : '') + '"></div>' +
+      '<div class="campo"><label>Observação do desconto</label><input type="text" id="em-desconto-obs" value="' + esc(m.desconto ? (m.desconto.obs || '') : '') + '"></div>' +
+      '</div>' +
+      '<div class="ct-acoes"><button class="btn sm on" type="button" data-act="salvar-matricula" data-id="' + m.id + '">Salvar</button></div>' +
+      '</div></article>');
   }
 
   function viewMatriculas() {
@@ -665,7 +693,7 @@
       '</div></div>';
   }
   function viewInadimplencia() {
-    const lista = S.alunos.filter(function (a) { return !a.bolsista && (a.pagamento.status === 'atrasado' || a.pagamento.status === 'pendente'); })
+    const lista = S.alunos.filter(function (a) { return !a.bolsista && !a.cancelado && (a.pagamento.status === 'atrasado' || a.pagamento.status === 'pendente'); })
       .sort(function (a, b) {
         if (a.pagamento.status !== b.pagamento.status) return a.pagamento.status === 'atrasado' ? -1 : 1;
         return L.norm(a.nome).localeCompare(L.norm(b.nome));
@@ -926,6 +954,14 @@
     const cls = { 'em dia': 'tag-ok', atrasado: 'tag-erro', pendente: 'tag-aviso', desconhecido: 'tag-neutro' }[st] || 'tag-neutro';
     return '<span class="tag ' + cls + '">' + esc(st || 'desconhecido') + '</span>';
   }
+  /* Bolsista não paga mensalidade e aluno cancelado já saiu — mostrar "desconhecido" ou qualquer
+     outro status de pagamento ao lado deles só confunde, então nesses dois casos a gente troca o
+     selo de pagamento pela própria tag (Bolsista / Cancelado). */
+  function selosPagamentoAluno(a) {
+    if (a.cancelado) return '<span class="tag tag-erro">Cancelado</span>';
+    if (a.bolsista) return '<span class="tag tag-aviso">Bolsista</span>';
+    return pagamentoBadge(a.pagamento.status);
+  }
   /* A data de rematrícula não é um campo próprio do aluno: vem do contrato da matrícula mais
      recente dele (contratoFim). Pegamos a matrícula com o contrato que vence mais tarde. */
   function rematriculaInfoAluno(a) {
@@ -951,27 +987,29 @@
       lista = lista.filter(function (a) { return L.norm(a.nome).indexOf(q) > -1; });
     }
     if (V.fPag === 'bolsista') lista = lista.filter(function (a) { return a.bolsista; });
+    else if (V.fPag === 'cancelado') lista = lista.filter(function (a) { return a.cancelado; });
     else if (V.fPag === 'cancelamento') lista = lista.filter(function (a) { return a.cancelamento && a.cancelamento.solicitado; });
     else if (V.fPag) lista = lista.filter(function (a) { return (a.pagamento.status || 'desconhecido') === V.fPag; });
     lista.sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
     const resumo = { 'em dia': 0, atrasado: 0, pendente: 0, desconhecido: 0 };
-    let nBolsistas = 0, nCancelamento = 0;
-    S.alunos.forEach(function (a) { const s = a.pagamento.status || 'desconhecido'; resumo[s] = (resumo[s] || 0) + 1; if (a.bolsista) nBolsistas++; if (a.cancelamento && a.cancelamento.solicitado) nCancelamento++; });
+    let nBolsistas = 0, nCancelamento = 0, nCancelados = 0;
+    S.alunos.forEach(function (a) { const s = a.pagamento.status || 'desconhecido'; resumo[s] = (resumo[s] || 0) + 1; if (a.bolsista) nBolsistas++; if (a.cancelamento && a.cancelamento.solicitado) nCancelamento++; if (a.cancelado) nCancelados++; });
     return '<div class="topo"><h1>Alunos (' + S.alunos.length + ')</h1></div>' +
       '<div class="filtros">' +
       '<input type="search" placeholder="Buscar aluno por nome…" value="' + esc(V.buscaAluno) + '" data-act="busca-aluno">' +
       '<select data-act="filtro-pag"><option value="">Todos os pagamentos</option>' +
       ['em dia', 'pendente', 'atrasado', 'desconhecido'].map(function (s) { return '<option value="' + s + '"' + (V.fPag === s ? ' selected' : '') + '>' + s + ' (' + (resumo[s] || 0) + ')</option>'; }).join('') +
       '<option value="bolsista"' + (V.fPag === 'bolsista' ? ' selected' : '') + '>bolsistas (' + nBolsistas + ')</option>' +
+      '<option value="cancelado"' + (V.fPag === 'cancelado' ? ' selected' : '') + '>cancelados (' + nCancelados + ')</option>' +
       '<option value="cancelamento"' + (V.fPag === 'cancelamento' ? ' selected' : '') + '>cancelamento solicitado (' + nCancelamento + ')</option>' +
       '</select></div>' +
       '<table class="tabela"><thead><tr><th>Aluno</th><th>Turmas</th><th>Pagamento</th><th>Frequência</th><th>Rematrícula</th><th>Material</th><th></th></tr></thead><tbody>' +
       lista.map(function (a) {
         const turmasTxt = a.turmas.map(function (x) { return x.turma + ' (' + x.semestre + ')'; }).join(', ');
-        return '<tr>' +
+        return '<tr' + (a.cancelado ? ' class="linha-cancelada"' : '') + '>' +
           '<td><b>' + esc(a.nome) + '</b>' + (a.telefone ? ('<div class="muted">' + esc(a.telefone) + '</div>') : '') + '</td>' +
           '<td class="muted">' + esc(turmasTxt || '—') + '</td>' +
-          '<td>' + pagamentoBadge(a.pagamento.status) + (a.bolsista ? ' <span class="tag tag-aviso">Bolsista</span>' : '') + (a.cancelamento && a.cancelamento.solicitado ? ' <span class="tag tag-erro">Cancelamento solicitado</span>' : '') + '</td>' +
+          '<td>' + selosPagamentoAluno(a) + (a.cancelamento && a.cancelamento.solicitado && !a.cancelado ? ' <span class="tag tag-erro">Cancelamento solicitado</span>' : '') + '</td>' +
           '<td class="muted">' + Object.keys(a.frequencia || {}).length + ' registro(s)</td>' +
           '<td>' + (a.rematricula.enviada ? '<span class="tag tag-ok">Enviada</span>' : '<span class="tag tag-neutro">Não enviada</span>') + '</td>' +
           '<td>' + (a.materialDidatico.enviado ? '<span class="tag tag-ok">Enviado</span>' : '<span class="tag tag-neutro">Não enviado</span>') + '</td>' +
@@ -1010,7 +1048,7 @@
       ) : '') +
       '<h3>Turmas</h3><ul>' + (a.turmas || []).map(function (t) { return '<li>' + esc(t.turma) + ' · ' + esc(t.semestre) + '</li>'; }).join('') + '</ul>' +
       '<h3>Rematrícula</h3><p>' + tagRematricula(rematriculaInfoAluno(a)) + '</p>' +
-      '<h3>Pagamento</h3><p>' + pagamentoBadge(a.pagamento.status) + (a.pagamento.obs ? (' <span class="muted">' + esc(a.pagamento.obs) + '</span>') : '') + '</p>' +
+      '<h3>Pagamento</h3><p>' + selosPagamentoAluno(a) + (a.pagamento.obs ? (' <span class="muted">' + esc(a.pagamento.obs) + '</span>') : '') + '</p>' +
       '<div class="campos-matricula">' +
       '<div class="campo"><label>Situação manual</label><select data-act="pag-status" data-id="' + a.id + '">' +
       ['desconhecido', 'em dia', 'pendente', 'atrasado'].map(function (s) { return '<option value="' + s + '"' + (a.pagamento.status === s ? ' selected' : '') + '>' + s + '</option>'; }).join('') + '</select></div>' +
@@ -1028,9 +1066,12 @@
       (temTel ? '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemMaterialDidatico(a, a.turmas && a.turmas[0], a.livroDidatico.qual)) + '" data-act="marcar-material" data-id="' + a.id + '">Material didático</a>' : '') +
       (temTel ? '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemCobranca(a)) + '">Cobrança</a>' : '') +
       '</div>' +
-      '<h3>Excluir aluno</h3>' +
-      '<p class="muted">Use para alunos que saíram, duplicados, ou cadastros criados por engano. O histórico de matrícula não é apagado (continua guardando o nome), só o cadastro do aluno e a ligação dele com as turmas.</p>' +
-      '<div class="ct-acoes"><button class="btn sm" type="button" data-act="excluir-aluno" data-id="' + a.id + '">Excluir aluno</button></div>' +
+      '<h3>Cancelar matrícula ou excluir aluno</h3>' +
+      '<p class="muted">Use <b>Marcar como cancelado</b> quando o aluno realmente saiu — ele continua aparecendo no sistema e na(s) turma(s) dele (só com a tag "Cancelado"), para manter o histórico de que ele passou por ali. Use <b>Excluir aluno</b> só para cadastro duplicado ou criado por engano: aí sim ele some da lista e das turmas (o histórico de matrícula continua guardando o nome).</p>' +
+      '<div class="ct-acoes">' +
+      '<button class="btn sm' + (a.cancelado ? ' on' : '') + '" type="button" data-act="cancelado-toggle" data-id="' + a.id + '">' + (a.cancelado ? 'Reativar aluno (desmarcar cancelado)' : 'Marcar como cancelado') + '</button>' +
+      '<button class="btn sm" type="button" data-act="excluir-aluno" data-id="' + a.id + '">Excluir aluno</button>' +
+      '</div>' +
       '</div></article>');
   }
 
@@ -1214,6 +1255,17 @@
       registrar('Atualizou bolsista', a.nome + ' → ' + (a.bolsista ? 'bolsista' : 'não bolsista'));
       render();
     },
+    /* Cancela a matrícula SEM remover o aluno do sistema nem das turmas — ele continua aparecendo
+       (com a tag "Cancelado") para manter o histórico de que ele passou por ali. */
+    'cancelado-toggle': function (el) {
+      const a = D.alunoPorId[el.dataset.id];
+      if (!a) return;
+      a.cancelado = !a.cancelado;
+      LS.set('alunos', S.alunos);
+      registrar('Atualizou cancelamento efetivo', a.nome + ' → ' + (a.cancelado ? 'cancelado' : 'reativado'));
+      render();
+      dlgAluno(a.id);
+    },
     'excluir-aluno': function (el) {
       const a = D.alunoPorId[el.dataset.id];
       if (!a) return;
@@ -1314,7 +1366,7 @@
         const nome = (nm.alunoNome || '').trim();
         if (!nome) { toast('Informe o nome do aluno ou escolha um já cadastrado.'); return; }
         aluno = {
-          id: proxId('al', S.alunos), nome: nome, telefone: '', email: '', turmas: [], formaPagamento: nm.formaPagamento || 'asaas', bolsista: false,
+          id: proxId('al', S.alunos), nome: nome, telefone: '', email: '', turmas: [], formaPagamento: nm.formaPagamento || 'asaas', bolsista: false, cancelado: false,
           pagamento: { status: 'desconhecido', obs: '', atualizadoEm: '', valorEmAberto: '' }, frequencia: {},
           materialDidatico: { enviado: false, data: '', obs: '' }, rematricula: { enviada: false, data: '', obs: '' },
           livroDidatico: { qual: '', comprado: false, mensagemEnviada: false },
@@ -1358,6 +1410,51 @@
     'livro-matricula': function (el) {
       const m = D.matriculaPorId[el.dataset.id];
       if (m) { m.livro = el.value; LS.set('matriculas', S.matriculas); }
+    },
+    'editar-matricula': function (el) { dlgEditarMatricula(el.dataset.id); },
+    'salvar-matricula': function (el) {
+      const m = D.matriculaPorId[el.dataset.id];
+      if (!m) return;
+      const novaTurmaId = $('#em-turma').value;
+      const novaTurma = D.turmaPorId[novaTurmaId];
+      const dataInicio = $('#em-data').value;
+      if (!novaTurma || !dataInicio) { toast('Escolha a turma e a data de início.'); return; }
+      const turmaMudou = novaTurmaId !== m.turmaId;
+      if (turmaMudou) {
+        const aluno = D.alunoPorId[m.alunoId];
+        const turmaAntiga = D.turmaPorId[m.turmaId];
+        if (turmaAntiga) turmaAntiga.alunosNomes = (turmaAntiga.alunosNomes || []).filter(function (n) { return L.norm(n) !== L.norm(m.alunoNome); });
+        novaTurma.alunosNomes = novaTurma.alunosNomes || [];
+        if (!novaTurma.alunosNomes.some(function (n) { return L.norm(n) === L.norm(m.alunoNome); })) novaTurma.alunosNomes.push(m.alunoNome);
+        if (aluno) {
+          aluno.turmas = (aluno.turmas || []).filter(function (x) { return x.turmaId !== m.turmaId; });
+          aluno.turmas.push({ turmaId: novaTurma.id, semestre: novaTurma.semestre, turma: novaTurma.turma });
+        }
+        LS.set('turmas', S.turmas); LS.set('alunos', S.alunos);
+      }
+      m.turmaId = novaTurma.id; m.turmaNome = novaTurma.turma;
+      m.dataInicio = dataInicio; m.contratoFim = L.fimContrato(dataInicio);
+      m.dataPagamento = $('#em-data-pagamento').value || '';
+      m.formaPagamento = $('#em-pagamento').value;
+      m.valorMensalidade = $('#em-valor-mensalidade').value;
+      m.livro = $('#em-livro').value;
+      m.valorMaterial = $('#em-valor-material').value;
+      const descontoTem = $('#em-desconto-tem').checked;
+      m.desconto = { tem: descontoTem, valor: descontoTem ? $('#em-desconto-valor').value : '', obs: descontoTem ? $('#em-desconto-obs').value : '' };
+      LS.set('matriculas', S.matriculas);
+      registrar('Editou matrícula', m.alunoNome + ' · ' + m.turmaNome);
+      toast('Matrícula atualizada.');
+      fecharDlg();
+      recalc(); render();
+    },
+    'excluir-matricula': function (el) {
+      const m = D.matriculaPorId[el.dataset.id];
+      if (!m) return;
+      if (typeof confirm === 'function' && !confirm('Excluir esta matrícula de "' + m.alunoNome + '"? Isso não remove o aluno da turma — só apaga o registro/checklist da matrícula. Para tirar o aluno da turma, use "Remover da turma" na ficha da turma.')) return;
+      S.matriculas = S.matriculas.filter(function (x) { return x.id !== m.id; });
+      LS.set('matriculas', S.matriculas);
+      registrar('Excluiu matrícula', m.alunoNome + ' · ' + m.turmaNome);
+      render();
     },
     /* ---- Compromissos ---- */
     'nc-titulo': function (el) { V.novoCompromisso.titulo = el.value; },
