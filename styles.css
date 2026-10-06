@@ -116,6 +116,15 @@ textarea { resize: vertical; font-family: inherit; }
 .legenda-prof.off { opacity: 0.4; }
 .legenda-bolha { width: 0.6rem; height: 0.6rem; border-radius: 50%; background: var(--pc); flex: none; }
 @media (max-width: 900px) { .grade { grid-template-columns: repeat(7, 11rem); } }
+.semana-modo { display: inline-flex; gap: 0.3rem; margin-right: 0.4rem; }
+.ja-aconteceu { border-top: 1px dashed var(--line-2); }
+.ja-aconteceu summary { padding: 0.4rem 0.7rem; font-size: 0.76rem; color: var(--ink-3); cursor: pointer; user-select: none; list-style: none; }
+.ja-aconteceu summary::-webkit-details-marker { display: none; }
+.ja-aconteceu summary::before { content: '▸ '; }
+.ja-aconteceu[open] summary::before { content: '▾ '; }
+.ja-aconteceu .grade-item { opacity: 0.55; }
+.agenda-dia { max-width: 28rem; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.agenda-dia .grade-item { padding: 0.75rem 0.9rem; }
 
 /* Cards de turma */
 .lista-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 0.9rem; }

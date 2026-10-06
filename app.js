@@ -91,9 +91,18 @@
   })();
   const params = new URLSearchParams(location.search);
   const HOJE = /^\d{4}-\d{2}-\d{2}$/.test(params.get('hoje') || '') ? params.get('hoje') : new Date().toISOString().slice(0, 10);
+  // Minutos desde meia-noite agora — usado pra saber quais turmas do dia já aconteceram. Aceita
+  // "?agora=HH:MM" (igual ao "?hoje=") só pra dar pra testar de forma previsível; no uso real
+  // (sem o parâmetro) usa o horário de verdade do relógio.
+  const AGORA_MIN = (function () {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(params.get('agora') || '');
+    if (m) return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+    const d = new Date();
+    return d.getHours() * 60 + d.getMinutes();
+  })();
   const V = {
     view: 'semana', semestre: L.semestreDeData(HOJE), fProf: '', fSit: '', buscaTurma: '', buscaAluno: '', fPag: '', syncStatus: 'sem-config',
-    semanaOffset: 0,
+    semanaOffset: 0, semanaModo: 'semana', diaOffsetDias: 0,
     novaMatricula: {
       alunoId: '', alunoNome: '', turmaId: '', dataInicio: '', dataPagamento: '', formaPagamento: 'asaas',
       valorMensalidade: '', valorMaterial: '', livro: '', descontoTem: false, descontoValor: '', descontoObs: '',
@@ -335,7 +344,37 @@
     const i = lista.indexOf(nome || '—');
     return PROF_CORES[(i < 0 ? 0 : i) % PROF_CORES.length];
   }
+  function itemTurmaHTML(t) {
+    const oculto = V.semProfsOcultos[t.professor || '—'];
+    return '<div class="grade-item' + (oculto ? ' dim' : '') + '" style="--pc:' + corDoProfessor(t.professor) + '" data-act="ver-turma" data-id="' + t.id + '">' +
+      '<div class="gi-hora">' + esc(t.horario) + '</div><div class="gi-turma">' + esc(t.turma) + '</div>' +
+      '<div class="gi-prof">' + esc(t.professor || '') + (t.sala ? (' · ' + esc(t.sala)) : '') + '</div></div>';
+  }
+  function itemCompromissoHTML(c) {
+    return '<div class="grade-item compromisso" data-act="ir-aba" data-view="compromissos">' +
+      '<div class="gi-hora">' + esc(c.horario || 'sem horário') + ' · 📅</div><div class="gi-turma">' + esc(c.titulo) + '</div>' +
+      '<div class="gi-prof">' + esc(c.comQuem || '') + '</div></div>';
+  }
+  /* Separa, dentro do dia de HOJE, as turmas cujo horário já terminou (segundo o relógio agora)
+     das que ainda vão rolar — só faz sentido pro dia de hoje; nos outros dias (passados ou
+     futuros) a lista inteira continua igual, sem essa separação. Turma com horário que não dá
+     pra entender (texto fora do padrão) fica do lado "futuras", pra nunca sumir por engano. */
+  function separarJaAconteceu(lista, ehHoje) {
+    if (!ehHoje) return { futuras: lista, passadas: [] };
+    const futuras = [], passadas = [];
+    lista.forEach(function (t) {
+      const hm = L.horarioMin(t.horario);
+      if (hm && hm[1] <= AGORA_MIN) passadas.push(t); else futuras.push(t);
+    });
+    return { futuras: futuras, passadas: passadas };
+  }
+  function blocoJaAconteceu(passadas) {
+    if (!passadas.length) return '';
+    return '<details class="ja-aconteceu"><summary>Já aconteceu hoje (' + passadas.length + ')</summary>' +
+      passadas.map(itemTurmaHTML).join('') + '</details>';
+  }
   function viewSemana() {
+    if (V.semanaModo === 'dia') return viewDia();
     const segunda = L.somaDias(L.segundaDaSemana(HOJE), V.semanaOffset * 7);
     const semestreSemana = L.semestreDeData(segunda);
     const turmasDoSemestreTodas = S.turmas.filter(function (t) { return t.semestre === semestreSemana && t.situacao !== 'A confirmar'; });
@@ -349,22 +388,17 @@
     const grade = L.gradeSemanal(turmasDoSemestre);
     const diasSemana = L.DIAS_ORDEM.map(function (d, i) { return { id: d, data: L.somaDias(segunda, i) }; });
     const colunas = diasSemana.map(function (dia) {
-      const lista = grade[dia.id] || [];
+      const listaTodas = grade[dia.id] || [];
       const compromissosDoDia = S.compromissos.filter(function (c) { return c.data === dia.data && c.status === 'agendado'; })
         .sort(function (a, b) { return (a.horario || '').localeCompare(b.horario || ''); });
       const ehHoje = dia.data === HOJE;
+      const sep = separarJaAconteceu(listaTodas, ehHoje);
+      const vazio = !sep.futuras.length && !compromissosDoDia.length && !sep.passadas.length;
       return '<div class="grade-col' + (ehHoje ? ' hoje' : '') + '"><div class="grade-col-h">' + L.DIAS_FULL[dia.id] + '<span class="grade-col-data">' + esc(L.fmtCurta(dia.data)) + '</span></div>' +
-        compromissosDoDia.map(function (c) {
-          return '<div class="grade-item compromisso" data-act="ir-aba" data-view="compromissos">' +
-            '<div class="gi-hora">' + esc(c.horario || 'sem horário') + ' · 📅</div><div class="gi-turma">' + esc(c.titulo) + '</div>' +
-            '<div class="gi-prof">' + esc(c.comQuem || '') + '</div></div>';
-        }).join('') +
-        (lista.length ? lista.map(function (t) {
-          const oculto = V.semProfsOcultos[t.professor || '—'];
-          return '<div class="grade-item' + (oculto ? ' dim' : '') + '" style="--pc:' + corDoProfessor(t.professor) + '" data-act="ver-turma" data-id="' + t.id + '">' +
-            '<div class="gi-hora">' + esc(t.horario) + '</div><div class="gi-turma">' + esc(t.turma) + '</div>' +
-            '<div class="gi-prof">' + esc(t.professor || '') + (t.sala ? (' · ' + esc(t.sala)) : '') + '</div></div>';
-        }).join('') : (compromissosDoDia.length ? '' : '<div class="grade-vazio">—</div>')) + '</div>';
+        compromissosDoDia.map(itemCompromissoHTML).join('') +
+        sep.futuras.map(itemTurmaHTML).join('') +
+        blocoJaAconteceu(sep.passadas) +
+        (vazio ? '<div class="grade-vazio">—</div>' : '') + '</div>';
     }).join('');
     const faixa = L.fmtCurta(segunda) + ' – ' + L.fmtCurta(L.somaDias(segunda, 6)) + ' · semestre ' + semestreSemana;
     const legenda = D.profsOrdenados.map(function (nome) {
@@ -373,6 +407,7 @@
         '<span class="legenda-bolha" style="--pc:' + corDoProfessor(nome) + '"></span>' + esc(nome) + '</button>';
     }).join('');
     return '<div class="topo"><h1>Semana</h1><div class="topo-acoes">' +
+      '<div class="semana-modo"><button class="btn sm on" type="button" data-act="semana-modo" data-m="semana">Semana inteira</button><button class="btn sm" type="button" data-act="semana-modo" data-m="dia">Só um dia</button></div>' +
       '<button class="btn sm" type="button" data-act="semana-nav" data-d="-1">← Semana anterior</button>' +
       '<button class="btn sm" type="button" data-act="semana-nav" data-d="0">Hoje</button>' +
       '<button class="btn sm" type="button" data-act="semana-nav" data-d="1">Próxima semana →</button>' +
@@ -381,6 +416,38 @@
       (D.profsOrdenados.length > 1 ? ('<div class="legenda-profs"><span class="muted legenda-dica">Clique para destacar só as turmas de um(a) professor(a):</span>' + legenda + (Object.keys(V.semProfsOcultos).length ? '<button class="btn sm" type="button" data-act="semana-prof-limpar">Mostrar todos</button>' : '') + '</div>') : '') +
       '<div class="grade">' + colunas + '</div>' +
       (confirmar.length ? ('<h2 class="subtitulo">Turmas em formação (' + confirmar.length + ')</h2><p class="muted">A confirmar ou ainda sem nenhum aluno matriculado — por isso não aparecem na grade acima.</p><div class="lista-cards">' + confirmar.map(function (t) { return cardTurma(t); }).join('') + '</div>') : '');
+  }
+
+  /* ---------- Semana, modo "Só um dia": agenda vertical de um único dia, mais fácil de ler que
+     7 colunas espremidas quando o que importa é só "o que tenho hoje" ---------- */
+  function viewDia() {
+    const dataAtual = L.somaDias(HOJE, V.diaOffsetDias);
+    const diaId = L.diaDaSemana(dataAtual);
+    const semestreDia = L.semestreDeData(dataAtual);
+    const turmasDoSemestreTodas = S.turmas.filter(function (t) { return t.semestre === semestreDia && t.situacao !== 'A confirmar' && (t.alunosNomes || []).length > 0; });
+    D.profsOrdenados = Array.from(new Set(turmasDoSemestreTodas.map(function (t) { return t.professor || '—'; }))).sort();
+    const turmasDoDia = turmasDoSemestreTodas.filter(function (t) { return L.diasDaTurma(t.dia).indexOf(diaId) > -1; })
+      .sort(function (a, b) { const ha = L.horarioMin(a.horario), hb = L.horarioMin(b.horario); return (ha ? ha[0] : 0) - (hb ? hb[0] : 0); });
+    const compromissosDoDia = S.compromissos.filter(function (c) { return c.data === dataAtual && c.status === 'agendado'; })
+      .sort(function (a, b) { return (a.horario || '').localeCompare(b.horario || ''); });
+    const ehHoje = dataAtual === HOJE;
+    const sep = separarJaAconteceu(turmasDoDia, ehHoje);
+    // junta turmas (ainda por vir) e compromissos numa única lista, ordenada por horário
+    const eventos = sep.futuras.map(function (t) { const hm = L.horarioMin(t.horario); return { ini: hm ? hm[0] : 9999, html: itemTurmaHTML(t) }; })
+      .concat(compromissosDoDia.map(function (c) { const m = L.horaParaMin(c.horario); return { ini: m == null ? 9999 : m, html: itemCompromissoHTML(c) }; }))
+      .sort(function (a, b) { return a.ini - b.ini; });
+    const vazio = !eventos.length && !sep.passadas.length;
+    return '<div class="topo"><h1>Semana</h1><div class="topo-acoes">' +
+      '<div class="semana-modo"><button class="btn sm" type="button" data-act="semana-modo" data-m="semana">Semana inteira</button><button class="btn sm on" type="button" data-act="semana-modo" data-m="dia">Só um dia</button></div>' +
+      '<button class="btn sm" type="button" data-act="dia-nav" data-d="-1">← Dia anterior</button>' +
+      '<button class="btn sm" type="button" data-act="dia-nav" data-d="0">Hoje</button>' +
+      '<button class="btn sm" type="button" data-act="dia-nav" data-d="1">Próximo dia →</button>' +
+      '</div></div>' +
+      '<p class="muted">' + esc(L.DIAS_FULL[diaId]) + ', ' + esc(L.fmtCurta(dataAtual)) + (ehHoje ? ' · hoje' : '') + ' · semestre ' + esc(semestreDia) + '</p>' +
+      '<div class="agenda-dia">' +
+      (eventos.length ? eventos.map(function (e) { return e.html; }).join('') : (vazio ? '<div class="grade-vazio">Nenhuma turma ou compromisso neste dia.</div>' : '')) +
+      blocoJaAconteceu(sep.passadas) +
+      '</div>';
   }
 
   /* ---------- Turmas ---------- */
@@ -1293,6 +1360,8 @@
     fechar: function () { fecharDlg(); },
     semestre: function (el) { V.semestre = el.dataset.s; render(); },
     'semana-nav': function (el) { const d = Number(el.dataset.d); V.semanaOffset = d === 0 ? 0 : V.semanaOffset + d; render(); },
+    'semana-modo': function (el) { V.semanaModo = el.dataset.m; render(); },
+    'dia-nav': function (el) { const d = Number(el.dataset.d); V.diaOffsetDias = d === 0 ? 0 : V.diaOffsetDias + d; render(); },
     'semana-prof-toggle': function (el) {
       const nome = el.dataset.prof;
       if (V.semProfsOcultos[nome]) delete V.semProfsOcultos[nome]; else V.semProfsOcultos[nome] = true;
