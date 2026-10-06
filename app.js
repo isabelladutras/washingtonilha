@@ -26,7 +26,7 @@
     professores: LS.get('professores', null) || (DATA.professores || []).map(function (p) { return Object.assign({}, p); }),
     turmas: LS.get('turmas', null) || (DATA.turmas || []).map(function (t) { return Object.assign({}, t); }),
     alunos: alunosSalvos || (DATA.alunos || []).map(function (a) {
-      return Object.assign({ formaPagamento: 'desconhecido', email: '', bolsista: false, cancelado: false, dataInicio: '' }, a, {
+      return Object.assign({ formaPagamento: 'desconhecido', email: '', bolsista: false, cancelado: false, dataInicio: '', responsavelFinanceiro: '' }, a, {
         pagamento: Object.assign({ valorEmAberto: '' }, a.pagamento), frequencia: Object.assign({}, a.frequencia),
         materialDidatico: Object.assign({}, a.materialDidatico), rematricula: Object.assign({}, a.rematricula),
         livroDidatico: Object.assign({ qual: '', comprado: false, mensagemEnviada: false }, a.livroDidatico),
@@ -66,6 +66,7 @@
       if (a.bolsista == null) a.bolsista = false;
       if (a.cancelado == null) a.cancelado = false;
       if (a.email == null) a.email = '';
+      if (a.responsavelFinanceiro == null) a.responsavelFinanceiro = '';
     });
     return lista;
   }
@@ -1033,6 +1034,7 @@
       '<div class="campo"><label>Telefone (WhatsApp)</label><input type="text" data-act="tel-aluno" data-id="' + a.id + '" value="' + esc(a.telefone || '') + '" placeholder="(21) 99999-9999"></div>' +
       '<div class="campo"><label>E-mail</label><input type="text" data-act="email-aluno" data-id="' + a.id + '" value="' + esc(a.email || '') + '" placeholder="nome@email.com"></div>' +
       '<div class="campo"><label>Onde paga</label><select data-act="forma-pagamento-aluno" data-id="' + a.id + '"><option value="asaas"' + (a.formaPagamento !== 'unidade' ? ' selected' : '') + '>Pelo Asaas</option><option value="unidade"' + (a.formaPagamento === 'unidade' ? ' selected' : '') + '>Na unidade (não entra na importação do Asaas)</option></select></div>' +
+      '<div class="campo"><label>Nome de quem paga no Asaas (se for diferente do aluno)</label><input type="text" data-act="responsavel-financeiro-aluno" data-id="' + a.id + '" value="' + esc(a.responsavelFinanceiro || '') + '" placeholder="Ex.: nome do pai/mãe, se o boleto vier no nome dele(a)"></div>' +
       '<div class="campo"><label>Data que iniciou com a gente</label><input type="date" data-act="data-inicio-aluno" data-id="' + a.id + '" value="' + esc(a.dataInicio || '') + '"></div>' +
       '</div>' +
       '<div class="check"><label><input type="checkbox" data-act="bolsista-aluno" data-id="' + a.id + '"' + (a.bolsista ? ' checked' : '') + '> Aluno bolsista (não entra na cobrança/inadimplência)</label></div>' +
@@ -1247,6 +1249,12 @@
       render();
     },
     'pag-status': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.pagamento.status = el.value; a.pagamento.atualizadoEm = new Date().toISOString(); LS.set('alunos', S.alunos); registrar('Atualizou pagamento (manual)', a.nome + ' → ' + el.value); } },
+    'responsavel-financeiro-aluno': function (el) {
+      const a = D.alunoPorId[el.dataset.id];
+      if (!a) return;
+      a.responsavelFinanceiro = el.value;
+      LS.set('alunos', S.alunos);
+    },
     'bolsista-aluno': function (el) {
       const a = D.alunoPorId[el.dataset.id];
       if (!a) return;
@@ -1322,7 +1330,15 @@
         let atualizados = 0; const semMatch = [];
         linhas.forEach(function (l) {
           const key = L.norm(l.nome);
-          const aluno = S.alunos.find(function (a) { return L.norm(a.nome) === key; });
+          const descNorm = l.descricao ? L.norm(l.descricao) : '';
+          // 1) nome do aluno bate direto com o nome no boleto (caso raro, mas ideal);
+          // 2) o boleto está no nome do responsável financeiro cadastrado na ficha do aluno
+          //    (ex.: boleto no nome do pai/mãe — é o caso mais comum no Asaas);
+          // 3) o nome do aluno aparece dentro da descrição/histórico do boleto (quando o Asaas
+          //    exporta essa coluna e o nome do aluno foi escrito lá).
+          let aluno = S.alunos.find(function (a) { return L.norm(a.nome) === key; });
+          if (!aluno) aluno = S.alunos.find(function (a) { return a.responsavelFinanceiro && L.norm(a.responsavelFinanceiro) === key; });
+          if (!aluno && descNorm) aluno = S.alunos.find(function (a) { return a.nome && descNorm.indexOf(L.norm(a.nome)) > -1; });
           if (aluno && aluno.formaPagamento !== 'unidade') {
             const statusNovo = L.statusPagamento(l.status);
             aluno.pagamento = Object.assign({}, aluno.pagamento, {
@@ -1366,11 +1382,12 @@
         const nome = (nm.alunoNome || '').trim();
         if (!nome) { toast('Informe o nome do aluno ou escolha um já cadastrado.'); return; }
         aluno = {
-          id: proxId('al', S.alunos), nome: nome, telefone: '', email: '', turmas: [], formaPagamento: nm.formaPagamento || 'asaas', bolsista: false, cancelado: false,
+          id: proxId('al', S.alunos), nome: nome, telefone: '', email: '', turmas: [], formaPagamento: nm.formaPagamento || 'asaas', bolsista: false, cancelado: false, responsavelFinanceiro: '', dataInicio: nm.dataInicio || '',
           pagamento: { status: 'desconhecido', obs: '', atualizadoEm: '', valorEmAberto: '' }, frequencia: {},
           materialDidatico: { enviado: false, data: '', obs: '' }, rematricula: { enviada: false, data: '', obs: '' },
           livroDidatico: { qual: '', comprado: false, mensagemEnviada: false },
           cobranca: { etapa: 0, enviadoEm: '' },
+          cancelamento: { solicitado: false, data: '', motivo: '' },
         };
         S.alunos.push(aluno);
       } else {

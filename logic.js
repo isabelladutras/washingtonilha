@@ -380,6 +380,10 @@
     const iStatus = col(['status', 'situacao']);
     const iVenc = col(['vencimento', 'data de vencimento', 'data vencimento']);
     const iValor = col(['valor', 'valor (r$)', 'valor cobranca']);
+    // No Asaas o boleto quase sempre sai no nome de quem paga (responsável/pai), não no nome do
+    // aluno — mas o nome do aluno costuma aparecer na descrição/histórico da cobrança. Pegamos
+    // essa coluna também (quando existir) para o app.js tentar casar por ela como 2ª tentativa.
+    const iDescricao = col(['descricao', 'descrição', 'historico', 'histórico', 'observacoes', 'observações', 'referencia', 'referência']);
     if (iNome < 0) return [];
     const out = [];
     for (let i = 1; i < linhas.length; i++) {
@@ -391,6 +395,7 @@
         status: iStatus > -1 ? (cols[iStatus] || '').trim() : '',
         vencimento: iVenc > -1 ? (cols[iVenc] || '').trim() : '',
         valor: iValor > -1 ? (cols[iValor] || '').trim() : '',
+        descricao: iDescricao > -1 ? (cols[iDescricao] || '').trim() : '',
       });
     }
     return out;
