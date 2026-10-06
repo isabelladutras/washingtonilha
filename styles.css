@@ -134,6 +134,9 @@ textarea { resize: vertical; font-family: inherit; }
 .lista-avisos { display: grid; gap: 0.6rem; }
 .aviso { padding: 0.7rem 0.9rem; border-radius: 8px; border-left: 4px solid var(--erro); background: var(--erro-soft); }
 .aviso-atencao { border-left-color: var(--warn); background: var(--warn-soft); }
+.dup-card { margin-bottom: 0.6rem; }
+.dup-card ul { margin: 0.3rem 0 0.5rem 1.1rem; }
+.dup-acoes { display: flex; gap: 0.5rem; flex-wrap: wrap; }
 
 /* Pendências */
 .lista-pendencias { display: grid; gap: 0.5rem; }
@@ -166,14 +169,48 @@ dialog::backdrop { background: rgba(10, 30, 26, 0.5); }
 .aluno-turma-acoes { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
 
 /* Login (quando a sincronização por Firebase está configurada) */
-.login-caixa { min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem; }
-.login-cartao { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 1.6rem 1.8rem; width: min(24rem, 100%); display: flex; flex-direction: column; gap: 0.5rem; box-shadow: 0 10px 30px rgba(10, 30, 26, 0.12); }
-.marca-login { margin-bottom: 0.2rem; }
+.login-caixa {
+  min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+  position: relative; overflow: hidden;
+  background: radial-gradient(circle at 15% 10%, #123a5c 0%, var(--rail) 45%, #061829 100%);
+}
+.login-fundo { position: absolute; inset: 0; overflow: hidden; pointer-events: none; }
+.login-mancha { position: absolute; border-radius: 50%; filter: blur(60px); opacity: 0.55; }
+.login-mancha-1 { width: 26rem; height: 26rem; background: var(--brand); top: -8rem; right: -6rem; }
+.login-mancha-2 { width: 20rem; height: 20rem; background: #0fb894; opacity: 0.25; bottom: -6rem; left: -5rem; }
+.login-cartao {
+  position: relative; z-index: 1;
+  background: var(--card); border: 1px solid var(--line); border-radius: 16px; padding: 2.1rem 2rem 1.8rem;
+  width: min(25rem, 100%); display: flex; flex-direction: column; gap: 0.6rem;
+  box-shadow: 0 30px 60px -12px rgba(5, 15, 25, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  animation: login-subir 0.45s ease-out;
+}
+@keyframes login-subir { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.login-selo {
+  width: 3rem; height: 3rem; border-radius: 12px; display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(135deg, var(--brand) 0%, var(--brand-strong) 100%); color: #fff;
+  font: 800 1.05rem/1 var(--font-display); letter-spacing: 0.02em; margin-bottom: 0.3rem;
+  box-shadow: 0 8px 16px -4px rgba(21, 101, 192, 0.45);
+}
+.marca-login { margin-bottom: 0; }
 .marca-login b { font: 800 1.3rem/1 var(--font-display); color: var(--rail); display: block; }
 .marca-login span { font-size: 0.85rem; color: var(--ink-2); }
-.login-cartao h1 { margin-bottom: 0.2rem; }
+.login-cartao h1 { margin: 0.6rem 0 0; font-size: 1.5rem; }
+.login-sub { margin: 0; color: var(--ink-2); font-size: 0.88rem; }
 .login-erro { background: var(--erro-soft); color: var(--erro); padding: 0.5rem 0.7rem; border-radius: 8px; font-size: 0.85rem; font-weight: 600; margin: 0; }
-.login-aviso { font-size: 0.78rem; margin: 0.2rem 0 0; }
+.campo-icone { margin-top: 0.2rem; }
+.campo-icone-caixa {
+  display: flex; align-items: center; gap: 0.55rem; border: 1px solid var(--line); border-radius: 9px;
+  padding: 0 0.7rem; background: #fbfdff; transition: border-color 0.15s, box-shadow 0.15s;
+}
+.campo-icone-caixa:focus-within { border-color: var(--brand); box-shadow: 0 0 0 3px var(--brand-soft); }
+.campo-icone-caixa svg { width: 1.1rem; height: 1.1rem; color: var(--ink-2); flex-shrink: 0; }
+.campo-icone-caixa input { border: 0; padding: 0.65rem 0; background: none; flex: 1; }
+.campo-icone-caixa input:focus { outline: none; box-shadow: none; }
+.login-botao { margin-top: 0.5rem; padding: 0.7rem; font-size: 0.95rem; border-radius: 9px; box-shadow: 0 8px 16px -4px rgba(21, 101, 192, 0.35); }
+.login-aviso { font-size: 0.78rem; margin: 0.2rem 0 0; text-align: center; }
+body.tela-login { grid-template-columns: minmax(0, 1fr); }
+body.tela-login .rail { display: none; }
 
 #toast { position: fixed; bottom: 1.2rem; left: 50%; transform: translateX(-50%); background: var(--ink); color: #fff; padding: 0.6rem 1rem; border-radius: 8px; font-weight: 600; opacity: 0; pointer-events: none; transition: opacity 0.2s; z-index: 20; max-width: calc(100vw - 2rem); }
 #toast.on { opacity: 1; }

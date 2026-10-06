@@ -170,7 +170,9 @@
     comunicados: '<path d="M3 11v2a2 2 0 0 0 2 2h1l3 4v-4h8a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z"/>',
     conferencia: '<path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
     buscar: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
-    dados: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>'
+    dados: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
+    email: '<rect x="2.5" y="4.5" width="19" height="15" rx="2.5"/><path d="m3.5 6 7.3 5.7a1.8 1.8 0 0 0 2.4 0L20.5 6"/>',
+    cadeado: '<rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5"/>'
   };
   const VIEWS = [
     { id: 'semana', nome: 'Semana' }, { id: 'pendencias', nome: 'Pendências' }, { id: 'turmas', nome: 'Turmas' }, { id: 'matriculas', nome: 'Matrículas' },
@@ -256,26 +258,33 @@
   }
   /* ---------- Login (quando a sincronização por Firebase está configurada) ---------- */
   function viewLogin() {
-    return '<div class="login-caixa"><form class="login-cartao">' +
+    return '<div class="login-caixa">' +
+      '<div class="login-fundo" aria-hidden="true"><span class="login-mancha login-mancha-1"></span><span class="login-mancha login-mancha-2"></span></div>' +
+      '<form class="login-cartao">' +
+      '<div class="login-selo">WI</div>' +
       '<div class="marca-login"><b>Washington Ilha</b><span>Painel acadêmico</span></div>' +
       '<h1>Entrar</h1>' +
+      '<p class="login-sub">Acesse com o e-mail e a senha cadastrados pela coordenação.</p>' +
       (V.loginErro ? ('<p class="login-erro">' + esc(V.loginErro) + '</p>') : '') +
-      '<div class="campo"><label>E-mail</label><input type="email" data-act="login-email" value="' + esc(V.loginEmail) + '" placeholder="seuemail@exemplo.com" autocomplete="username"></div>' +
-      '<div class="campo"><label>Senha</label><input type="password" data-act="login-senha" value="' + esc(V.loginSenha) + '" placeholder="Senha" autocomplete="current-password"></div>' +
-      '<button class="btn on" type="submit" data-act="fazer-login"' + (V.loginCarregando ? ' disabled' : '') + '>' + (V.loginCarregando ? 'Entrando…' : 'Entrar') + '</button>' +
+      '<div class="campo campo-icone"><label>E-mail</label><div class="campo-icone-caixa">' + svg('email') + '<input type="email" data-act="login-email" value="' + esc(V.loginEmail) + '" placeholder="seuemail@exemplo.com" autocomplete="username"></div></div>' +
+      '<div class="campo campo-icone"><label>Senha</label><div class="campo-icone-caixa">' + svg('cadeado') + '<input type="password" data-act="login-senha" value="' + esc(V.loginSenha) + '" placeholder="Senha" autocomplete="current-password"></div></div>' +
+      '<button class="btn on login-botao" type="submit" data-act="fazer-login"' + (V.loginCarregando ? ' disabled' : '') + '>' + (V.loginCarregando ? 'Entrando…' : 'Entrar') + '</button>' +
       '<p class="muted login-aviso">Não tem acesso ainda? Peça para a coordenação cadastrar seu e-mail no sistema.</p>' +
-      '</form></div>';
+      '</form>' +
+      '</div>';
   }
 
   function render() {
     const nav = $('#nav');
     if (Sync.configured() && !V.logado) {
+      document.body.classList.add('tela-login');
       nav.innerHTML = '';
       const app = $('#app');
       app.innerHTML = viewLogin();
       app.focus();
       return;
     }
+    document.body.classList.remove('tela-login');
     nav.innerHTML = VIEWS.map(function (v) {
       return '<button class="nav-item' + (V.view === v.id ? ' on' : '') + '" data-view="' + v.id + '">' + svg(v.id) + '<span>' + esc(v.nome) + '</span></button>';
     }).join('');
@@ -981,6 +990,79 @@
     }
     return '<span class="tag ' + cls + '">' + texto + '</span>';
   }
+  /* ---------- Detecta possíveis alunos duplicados (mesma pessoa cadastrada 2x) ----------
+     Isso acontece sobretudo quando um aluno é digitado de novo (com nome incompleto, ex.: só
+     "Amanda") numa turma diferente da que ele está de verdade. Critérios, do mais confiável
+     pro mais fraco: (1) mesmo telefone cadastrado; (2) nome normalizado idêntico; (3) um nome
+     "cabe dentro" do outro (mesmo primeiro nome e todas as palavras do nome menor aparecem no
+     nome maior, ex.: "Amanda" dentro de "Amanda Carla de Souza Santana"). */
+  function nomeContidoNoOutro(nomeA, nomeB) {
+    const tokA = L.norm(nomeA).split(/\s+/).filter(Boolean);
+    const tokB = L.norm(nomeB).split(/\s+/).filter(Boolean);
+    // Exige pelo menos 2 palavras no nome menor (ex.: "Amanda Carla"), senão um primeiro nome
+    // comum (ex.: "Ana") bate com dezenas de alunas "Ana Alguma Coisa" sem ser duplicado nenhum.
+    if (tokA.length < 2 || tokB.length < 2 || tokA[0] !== tokB[0]) return false;
+    const menor = tokA.length <= tokB.length ? tokA : tokB;
+    const maior = tokA.length <= tokB.length ? tokB : tokA;
+    if (menor.length === maior.length) return false;
+    return menor.every(function (t) { return maior.indexOf(t) > -1; });
+  }
+  function alunosDuplicadosProvaveis() {
+    const idsUsados = {};
+    const grupos = [];
+    function addGrupo(lista) {
+      const novos = lista.filter(function (a) { return !idsUsados[a.id]; });
+      if (novos.length < 2) return;
+      novos.forEach(function (a) { idsUsados[a.id] = true; });
+      grupos.push(novos);
+    }
+    const porTelefone = {};
+    S.alunos.forEach(function (a) {
+      const tel = (a.telefone || '').replace(/\D/g, '');
+      if (tel.length >= 8) (porTelefone[tel] = porTelefone[tel] || []).push(a);
+    });
+    Object.keys(porTelefone).forEach(function (k) { addGrupo(porTelefone[k]); });
+    const porNome = {};
+    S.alunos.forEach(function (a) {
+      const n = L.norm(a.nome);
+      if (n) (porNome[n] = porNome[n] || []).push(a);
+    });
+    Object.keys(porNome).forEach(function (k) { addGrupo(porNome[k]); });
+    // Um primeiro-e-segundo-nome comum (ex.: "Maria Eduarda") pode "caber dentro" do nome de
+    // várias alunas diferentes que não têm nada a ver uma com a outra — aí não é duplicado,
+    // é coincidência de nome. Só junta pelo nome quando sobra EXATAMENTE 1 candidato; quando
+    // o nome curto bate com 2+ alunos diferentes, é ambíguo demais pra juntar sozinho.
+    const restantes = S.alunos.filter(function (a) { return !idsUsados[a.id]; });
+    for (let i = 0; i < restantes.length; i++) {
+      const a = restantes[i];
+      if (idsUsados[a.id]) continue;
+      const candidatos = [];
+      for (let j = 0; j < restantes.length; j++) {
+        if (j === i) continue;
+        const b = restantes[j];
+        if (!idsUsados[b.id] && nomeContidoNoOutro(a.nome, b.nome)) candidatos.push(b);
+      }
+      if (candidatos.length === 1) {
+        const grupo = [a, candidatos[0]];
+        grupo.forEach(function (x) { idsUsados[x.id] = true; });
+        grupos.push(grupo);
+      }
+    }
+    return grupos;
+  }
+  function cardAlunoDuplicado(grupo) {
+    const idsGrupo = grupo.map(function (a) { return a.id; }).join(',');
+    return '<div class="aviso aviso-atencao dup-card">' +
+      '<p><b>Possível aluno duplicado:</b></p>' +
+      '<ul>' + grupo.map(function (a) {
+        const turmasTxt = (a.turmas || []).map(function (x) { return x.turma + ' (' + x.semestre + ')'; }).join(', ') || 'sem turma';
+        return '<li>' + esc(a.nome) + (a.telefone ? (' · ' + esc(a.telefone)) : '') + ' · ' + esc(turmasTxt) + ' · ' + selosPagamentoAluno(a) + '</li>';
+      }).join('') + '</ul>' +
+      '<div class="dup-acoes">' + grupo.map(function (a) {
+        return '<button class="btn sm" type="button" data-act="dup-mesclar" data-manter="' + a.id + '" data-grupo="' + idsGrupo + '">Manter "' + esc(a.nome) + '" e mesclar o(s) outro(s) aqui</button>';
+      }).join(' ') + '</div>' +
+      '</div>';
+  }
   function viewAlunos() {
     let lista = S.alunos.slice();
     if (V.buscaAluno) {
@@ -995,7 +1077,13 @@
     const resumo = { 'em dia': 0, atrasado: 0, pendente: 0, desconhecido: 0 };
     let nBolsistas = 0, nCancelamento = 0, nCancelados = 0;
     S.alunos.forEach(function (a) { const s = a.pagamento.status || 'desconhecido'; resumo[s] = (resumo[s] || 0) + 1; if (a.bolsista) nBolsistas++; if (a.cancelamento && a.cancelamento.solicitado) nCancelamento++; if (a.cancelado) nCancelados++; });
+    const grupoDuplicados = alunosDuplicadosProvaveis();
     return '<div class="topo"><h1>Alunos (' + S.alunos.length + ')</h1></div>' +
+      (grupoDuplicados.length ? (
+        '<h2 class="subtitulo">Possíveis duplicados (' + grupoDuplicados.length + ')</h2>' +
+        '<p class="muted">Mesmo telefone ou nome parecido em mais de um cadastro — provavelmente a mesma pessoa cadastrada 2x. Escolha qual cadastro manter; os outros são mesclados nele (turmas, matrículas e histórico passam a contar para o que ficar) e removidos da lista.</p>' +
+        grupoDuplicados.map(cardAlunoDuplicado).join('')
+      ) : '') +
       '<div class="filtros">' +
       '<input type="search" placeholder="Buscar aluno por nome…" value="' + esc(V.buscaAluno) + '" data-act="busca-aluno">' +
       '<select data-act="filtro-pag"><option value="">Todos os pagamentos</option>' +
@@ -1287,6 +1375,51 @@
       fecharDlg();
       recalc(); render();
       toast('Aluno excluído.');
+    },
+    /* Mescla um (ou mais) cadastro(s) duplicado(s) dentro do cadastro escolhido pra manter.
+       O(s) outro(s) saem da lista de alunos, mas tudo que eles tinham (turmas, matrículas,
+       compromissos, materiais, entradas e pendências) passa a apontar para quem ficou — nada
+       de histórico se perde, só deixa de estar espalhado em 2 cadastros. */
+    'dup-mesclar': function (el) {
+      const idManter = el.dataset.manter;
+      const idsGrupo = (el.dataset.grupo || '').split(',').filter(Boolean);
+      const manter = D.alunoPorId[idManter];
+      if (!manter) return;
+      const removerIds = idsGrupo.filter(function (id) { return id !== idManter; });
+      const removerAlunos = removerIds.map(function (id) { return D.alunoPorId[id]; }).filter(Boolean);
+      if (!removerAlunos.length) return;
+      const nomesRemovidos = removerAlunos.map(function (a) { return a.nome; }).join(', ');
+      if (typeof confirm === 'function' && !confirm('Mesclar "' + nomesRemovidos + '" dentro de "' + manter.nome + '"? As turmas, matrículas e histórico dos outros passam a contar para "' + manter.nome + '", e os cadastros duplicados saem da lista. Essa ação não pode ser desfeita.')) return;
+      removerAlunos.forEach(function (rem) {
+        (rem.turmas || []).forEach(function (x) {
+          manter.turmas = manter.turmas || [];
+          if (!manter.turmas.some(function (y) { return y.turmaId === x.turmaId; })) manter.turmas.push(x);
+          const t = D.turmaPorId[x.turmaId];
+          if (t && t.alunosNomes) {
+            const idx = t.alunosNomes.findIndex(function (n) { return L.norm(n.replace(/\s*[\(\*].*$/, '').replace(/\*$/, '')) === L.norm(rem.nome); });
+            if (idx > -1) {
+              if (t.alunosNomes.some(function (n) { return L.norm(n.replace(/\s*[\(\*].*$/, '').replace(/\*$/, '')) === L.norm(manter.nome); })) {
+                t.alunosNomes.splice(idx, 1);
+              } else {
+                t.alunosNomes[idx] = manter.nome;
+              }
+            }
+          }
+        });
+        S.matriculas.forEach(function (m) { if (m.alunoId === rem.id) { m.alunoId = manter.id; m.alunoNome = manter.nome; } });
+        S.compromissos.forEach(function (c) { if (c.alunoId === rem.id) { c.alunoId = manter.id; c.alunoNome = manter.nome; } });
+        S.materiais.forEach(function (ma) { if (ma.alunoId === rem.id) { ma.alunoId = manter.id; ma.alunoNome = manter.nome; } });
+        S.entradas.forEach(function (en) { if (en.alunoId === rem.id) { en.alunoId = manter.id; en.alunoNome = manter.nome; } });
+        S.pendencias.forEach(function (p) { if (p.alunoId === rem.id) p.alunoId = manter.id; });
+      });
+      const idsRemoverSet = {};
+      removerIds.forEach(function (id) { idsRemoverSet[id] = true; });
+      S.alunos = S.alunos.filter(function (a) { return !idsRemoverSet[a.id]; });
+      LS.set('alunos', S.alunos); LS.set('turmas', S.turmas); LS.set('matriculas', S.matriculas);
+      LS.set('compromissos', S.compromissos); LS.set('materiais', S.materiais); LS.set('entradas', S.entradas); LS.set('pendencias', S.pendencias);
+      registrar('Mesclou alunos duplicados', nomesRemovidos + ' → ' + manter.nome);
+      toast('Cadastro(s) mesclado(s) em "' + manter.nome + '".');
+      recalc(); render();
     },
     'marcar-rematricula': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.rematricula.enviada = true; a.rematricula.data = new Date().toISOString(); LS.set('alunos', S.alunos); registrar('Marcou mensagem de rematrícula como enviada', a.nome); } },
     'marcar-material': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.materialDidatico.enviado = true; a.materialDidatico.data = new Date().toISOString(); LS.set('alunos', S.alunos); registrar('Marcou material didático como enviado', a.nome); } },
