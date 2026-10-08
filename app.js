@@ -79,6 +79,43 @@
   }
   normalizarAlunos(S.alunos);
 
+  /* ---------- Valores em R$ digitados com vírgula (ex.: "150,00", do jeito que a gente escreve
+     no dia a dia) não podiam ser interpretados como número e o valor sumia da tela ("—"), mesmo
+     digitado certinho. Esta função aceita os dois formatos; a migração abaixo já conserta na hora
+     os lançamentos que ficaram assim, em qualquer navegador (e também quando chegam sincronizados
+     de outro navegador, em aplicarRemoto). ---------- */
+  function normalizarValorMoeda(v) {
+    if (v == null) return v;
+    const s = String(v).trim();
+    if (s === '' || s.indexOf(',') === -1) return s;
+    return s.replace(/\./g, '').replace(',', '.');
+  }
+  function normalizarValoresMoedaEm(lista, campos) {
+    let mudou = false;
+    (lista || []).forEach(function (obj) {
+      campos.forEach(function (campo) {
+        const partes = campo.split('.');
+        let alvo = obj;
+        for (let i = 0; i < partes.length - 1 && alvo; i++) alvo = alvo[partes[i]];
+        if (!alvo) return;
+        const chave = partes[partes.length - 1];
+        const v = alvo[chave];
+        if (typeof v === 'string' && v.indexOf(',') !== -1) {
+          const novo = normalizarValorMoeda(v);
+          if (novo !== v) { alvo[chave] = novo; mudou = true; }
+        }
+      });
+    });
+    return mudou;
+  }
+  function normalizarValoresMoeda() {
+    if (normalizarValoresMoedaEm(S.despesas, ['valor'])) LS.set('despesas', S.despesas);
+    if (normalizarValoresMoedaEm(S.entradas, ['valor'])) LS.set('entradas', S.entradas);
+    if (normalizarValoresMoedaEm(S.matriculas, ['valorMensalidade', 'valorMaterial', 'desconto.valor'])) LS.set('matriculas', S.matriculas);
+    if (normalizarValoresMoedaEm(S.alunos, ['pagamento.valorEmAberto'])) LS.set('alunos', S.alunos);
+  }
+  normalizarValoresMoeda();
+
   /* ---------- Migração: traz dados novos (ex.: telefone/e-mail importados) sem apagar edições manuais ---------- */
   (function migrarDadosPadrao() {
     const versaoNova = DATA.versaoDados || 0;
@@ -613,7 +650,7 @@
   function checklistCompleta(m) {
     return !!(m.checklist.sistemaWashington && m.checklist.contratoAssinado && m.checklist.materialCobrado && (m.formaPagamento === 'unidade' || m.checklist.boletoAsaas));
   }
-  const fmtReais = function (v) { return (v === '' || v == null || isNaN(Number(v))) ? '' : 'R$ ' + Number(v).toFixed(2).replace('.', ','); };
+  const fmtReais = function (v) { const n = Number(normalizarValorMoeda(v)); return (v === '' || v == null || isNaN(n)) ? '' : 'R$ ' + n.toFixed(2).replace('.', ','); };
 
   function cardMatricula(m) {
     const t = D.turmaPorId[m.turmaId];
@@ -868,7 +905,7 @@
       });
     const atrasados = lista.filter(function (a) { return a.pagamento.status === 'atrasado'; });
     const pendentes = lista.filter(function (a) { return a.pagamento.status === 'pendente'; });
-    const totalAberto = lista.reduce(function (soma, a) { const v = Number(a.pagamento.valorEmAberto); return soma + (isNaN(v) ? 0 : v); }, 0);
+    const totalAberto = lista.reduce(function (soma, a) { const v = Number(normalizarValorMoeda(a.pagamento.valorEmAberto)); return soma + (isNaN(v) ? 0 : v); }, 0);
     return '<div class="topo"><h1>Inadimplência</h1><div class="topo-acoes"><a class="btn sm" target="_blank" rel="noopener" href="' + ASAAS_DASHBOARD_URL + '">Abrir Asaas (situação financeira completa)</a></div></div>' +
       '<p class="muted">' + atrasados.length + ' atrasado(s) · ' + pendentes.length + ' pendente(s)' + (totalAberto ? (' · total em aberto informado: ' + fmtReais(totalAberto)) : '') + '</p>' +
       (lista.length ? ('<div class="lista-cards">' + lista.map(cardInadimplencia).join('') + '</div>') : '<p class="muted">Nenhum aluno atrasado ou pendente agora. 🎉</p>');
@@ -944,7 +981,7 @@
     const meses = mesesDisponiveis(S.entradas);
     const lista = (V.fMesEntradas ? S.entradas.filter(function (e) { return mesDeData(e.data) === V.fMesEntradas; }) : S.entradas.slice())
       .sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
-    const total = lista.reduce(function (s, e) { const v = Number(e.valor); return s + (isNaN(v) ? 0 : v); }, 0);
+    const total = lista.reduce(function (s, e) { const v = Number(normalizarValorMoeda(e.valor)); return s + (isNaN(v) ? 0 : v); }, 0);
     return '<div class="topo"><h1>Entradas</h1></div>' +
       '<section class="bloco">' +
       '<h2>Registrar entrada</h2>' +
@@ -990,9 +1027,9 @@
     const meses = mesesDisponiveis(S.despesas);
     const lista = (V.fMesDespesas ? S.despesas.filter(function (d) { return mesDeData(d.data) === V.fMesDespesas; }) : S.despesas.slice())
       .sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
-    const total = lista.reduce(function (s, d) { const v = Number(d.valor); return s + (isNaN(v) ? 0 : v); }, 0);
+    const total = lista.reduce(function (s, d) { const v = Number(normalizarValorMoeda(d.valor)); return s + (isNaN(v) ? 0 : v); }, 0);
     const porCategoria = {};
-    lista.forEach(function (d) { const v = Number(d.valor); porCategoria[d.categoria || 'Outro'] = (porCategoria[d.categoria || 'Outro'] || 0) + (isNaN(v) ? 0 : v); });
+    lista.forEach(function (d) { const v = Number(normalizarValorMoeda(d.valor)); porCategoria[d.categoria || 'Outro'] = (porCategoria[d.categoria || 'Outro'] || 0) + (isNaN(v) ? 0 : v); });
     const categoriasOrdenadas = Object.keys(porCategoria).sort(function (a, b) { return porCategoria[b] - porCategoria[a]; });
     return '<div class="topo"><h1>Despesas</h1></div>' +
       '<section class="bloco">' +
@@ -1917,8 +1954,8 @@
       const matricula = {
         id: proxId('mat', S.matriculas), alunoId: aluno.id, alunoNome: aluno.nome, turmaId: t.id, turmaNome: t.turma,
         dataInicio: nm.dataInicio, contratoFim: L.fimContrato(nm.dataInicio), dataPagamento: nm.dataPagamento || '',
-        formaPagamento: nm.formaPagamento || 'asaas', valorMensalidade: nm.valorMensalidade || '', valorMaterial: nm.valorMaterial || '',
-        livro: nm.livro || '', desconto: { tem: !!nm.descontoTem, valor: nm.descontoTem ? (nm.descontoValor || '') : '', obs: nm.descontoTem ? (nm.descontoObs || '') : '' },
+        formaPagamento: nm.formaPagamento || 'asaas', valorMensalidade: normalizarValorMoeda(nm.valorMensalidade) || '', valorMaterial: normalizarValorMoeda(nm.valorMaterial) || '',
+        livro: nm.livro || '', desconto: { tem: !!nm.descontoTem, valor: nm.descontoTem ? (normalizarValorMoeda(nm.descontoValor) || '') : '', obs: nm.descontoTem ? (nm.descontoObs || '') : '' },
         checklist: { sistemaWashington: false, boletoAsaas: false, contratoAssinado: false, materialCobrado: false },
         criadoEm: new Date().toISOString(), criadoPor: autorAtual(),
       };
@@ -1970,11 +2007,11 @@
       m.dataInicio = dataInicio; m.contratoFim = L.fimContrato(dataInicio);
       m.dataPagamento = $('#em-data-pagamento').value || '';
       m.formaPagamento = $('#em-pagamento').value;
-      m.valorMensalidade = $('#em-valor-mensalidade').value;
+      m.valorMensalidade = normalizarValorMoeda($('#em-valor-mensalidade').value);
       m.livro = $('#em-livro').value;
-      m.valorMaterial = $('#em-valor-material').value;
+      m.valorMaterial = normalizarValorMoeda($('#em-valor-material').value);
       const descontoTem = $('#em-desconto-tem').checked;
-      m.desconto = { tem: descontoTem, valor: descontoTem ? $('#em-desconto-valor').value : '', obs: descontoTem ? $('#em-desconto-obs').value : '' };
+      m.desconto = { tem: descontoTem, valor: descontoTem ? normalizarValorMoeda($('#em-desconto-valor').value) : '', obs: descontoTem ? $('#em-desconto-obs').value : '' };
       LS.set('matriculas', S.matriculas);
       registrar('Editou matrícula', m.alunoNome + ' · ' + m.turmaNome);
       toast('Matrícula atualizada.');
@@ -2061,7 +2098,7 @@
       recalc(); render();
     },
     /* ---- Inadimplência ---- */
-    'valor-aberto-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.pagamento.valorEmAberto = el.value; LS.set('alunos', S.alunos); } },
+    'valor-aberto-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.pagamento.valorEmAberto = normalizarValorMoeda(el.value); LS.set('alunos', S.alunos); } },
     'cobranca-etapa': function (el) {
       const a = D.alunoPorId[el.dataset.id];
       if (!a) return;
@@ -2136,7 +2173,7 @@
       if (!ne.valor) { toast('Informe o valor.'); return; }
       const entrada = {
         id: proxId('ent', S.entradas), data: ne.data, alunoId: ne.alunoId || '', alunoNome: nome,
-        valor: ne.valor, formaPagamento: ne.formaPagamento || 'Pix', referente: (ne.referente || '').trim(), obs: ne.obs || '',
+        valor: normalizarValorMoeda(ne.valor), formaPagamento: ne.formaPagamento || 'Pix', referente: (ne.referente || '').trim(), obs: ne.obs || '',
         criadoEm: new Date().toISOString(), criadoPor: autorAtual(),
       };
       S.entradas.push(entrada);
@@ -2180,7 +2217,7 @@
       if (!nd.valor) { toast('Informe o valor.'); return; }
       const despesa = {
         id: proxId('des', S.despesas), data: nd.data, descricao: nd.descricao.trim(), categoria: nd.categoria || 'Outro',
-        valor: nd.valor, pagoPor: (nd.pagoPor || '').trim(), pago: !!nd.pago, obs: nd.obs || '',
+        valor: normalizarValorMoeda(nd.valor), pagoPor: (nd.pagoPor || '').trim(), pago: !!nd.pago, obs: nd.obs || '',
         criadoEm: new Date().toISOString(), criadoPor: autorAtual(),
       };
       S.despesas.push(despesa);
@@ -2343,7 +2380,7 @@
         mudou = true;
       }
     });
-    if (mudou) { recalc(); render(); }
+    if (mudou) { normalizarValoresMoeda(); recalc(); render(); }
   }
   recalc();
 
