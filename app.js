@@ -1152,7 +1152,7 @@
      (ou já vencido e ainda ativo), pra aparecer destacado na aba Alunos em vez de só dentro do
      cadastro de cada um. ---------- */
   function alunosRematriculaProxima() {
-    return S.alunos.filter(function (a) { return !a.cancelado; })
+    return S.alunos.filter(function (a) { return !alunoEstaCancelado(a); })
       .map(function (a) { return { aluno: a, info: rematriculaInfoAluno(a) }; })
       .filter(function (x) { return x.info && x.info.dias != null && x.info.dias <= 30; })
       .sort(function (x, y) { return x.info.dias - y.info.dias; });
@@ -1170,7 +1170,7 @@
   /* ---------- Aniversariantes próximos: quem faz aniversário nos próximos 30 dias, pra lembrar
      de mandar uma mensagem. Usa a data de nascimento cadastrada na matrícula/cadastro. ---------- */
   function alunosAniversariantesProximos() {
-    return S.alunos.filter(function (a) { return !a.cancelado && a.dataNascimento; })
+    return S.alunos.filter(function (a) { return !alunoEstaCancelado(a) && a.dataNascimento; })
       .map(function (a) { return { aluno: a, dias: L.diasAteAniversario(a.dataNascimento, HOJE) }; })
       .filter(function (x) { return x.dias != null && x.dias <= 30; })
       .sort(function (x, y) { return x.dias - y.dias; });
@@ -1284,21 +1284,26 @@
       '<button class="btn sm' + (V.alunosAba === 'cancelados' ? ' on' : '') + '" type="button" data-act="alunos-aba" data-aba="cancelados">Cancelados (' + nCancelados + ')</button>' +
       '</div>';
   }
+  /* Um aluno "saiu" (e por isso vai pra aba Cancelados, não pra Ativos) tanto quando já foi
+     efetivamente marcado como cancelado quanto quando só pediu o cancelamento ainda — pra Isa não
+     precisar separar as duas coisas na cabeça: pediu pra sair, já sai da lista de Ativos. */
+  function alunoEstaCancelado(a) { return !!(a.cancelado || (a.cancelamento && a.cancelamento.solicitado)); }
   function alunosAtivosFiltrados() {
-    const ativos = S.alunos.filter(function (a) { return !a.cancelado; });
+    const ativos = S.alunos.filter(function (a) { return !alunoEstaCancelado(a); });
     let lista = ativos.slice();
     if (V.buscaAluno) {
       const q = L.norm(V.buscaAluno);
       lista = lista.filter(function (a) { return L.norm(a.nome).indexOf(q) > -1; });
     }
     if (V.fPag === 'bolsista') lista = lista.filter(function (a) { return a.bolsista; });
-    else if (V.fPag === 'cancelamento') lista = lista.filter(function (a) { return a.cancelamento && a.cancelamento.solicitado; });
-    else if (V.fPag) lista = lista.filter(function (a) { return (a.pagamento.status || 'desconhecido') === V.fPag; });
+    // Bolsista não entra no filtro por situação de pagamento (em dia/pendente/atrasado/desconhecido)
+    // — ele não tem mensalidade pra cobrar, então "desconhecido" não se aplica a ele.
+    else if (V.fPag) lista = lista.filter(function (a) { return !a.bolsista && (a.pagamento.status || 'desconhecido') === V.fPag; });
     lista.sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
     return lista;
   }
   function alunosCanceladosFiltrados() {
-    let lista = S.alunos.filter(function (a) { return a.cancelado; });
+    let lista = S.alunos.filter(alunoEstaCancelado);
     if (V.buscaAlunoCancelado) {
       const q = L.norm(V.buscaAlunoCancelado);
       lista = lista.filter(function (a) { return L.norm(a.nome).indexOf(q) > -1; });
@@ -1321,13 +1326,15 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
   function viewAlunos() {
-    const ativos = S.alunos.filter(function (a) { return !a.cancelado; });
-    const cancelados = S.alunos.filter(function (a) { return a.cancelado; });
+    const ativos = S.alunos.filter(function (a) { return !alunoEstaCancelado(a); });
+    const cancelados = S.alunos.filter(alunoEstaCancelado);
     if (V.alunosAba === 'cancelados') return viewAlunosCancelados(ativos.length, cancelados);
     const lista = alunosAtivosFiltrados();
     const resumo = { 'em dia': 0, atrasado: 0, pendente: 0, desconhecido: 0 };
-    let nBolsistas = 0, nCancelamento = 0;
-    ativos.forEach(function (a) { const s = a.pagamento.status || 'desconhecido'; resumo[s] = (resumo[s] || 0) + 1; if (a.bolsista) nBolsistas++; if (a.cancelamento && a.cancelamento.solicitado) nCancelamento++; });
+    let nBolsistas = 0;
+    // Bolsista não entra na contagem por situação de pagamento — ele não tem mensalidade, então
+    // não faz sentido ele "contar" como desconhecido/em dia/etc.
+    ativos.forEach(function (a) { if (a.bolsista) { nBolsistas++; return; } const s = a.pagamento.status || 'desconhecido'; resumo[s] = (resumo[s] || 0) + 1; });
     const grupoDuplicados = alunosDuplicadosProvaveis();
     const rematriculasProximas = alunosRematriculaProxima();
     const aniversariantes = alunosAniversariantesProximos();
@@ -1354,15 +1361,14 @@
       '<select data-act="filtro-pag"><option value="">Todos os pagamentos</option>' +
       ['em dia', 'pendente', 'atrasado', 'desconhecido'].map(function (s) { return '<option value="' + s + '"' + (V.fPag === s ? ' selected' : '') + '>' + s + ' (' + (resumo[s] || 0) + ')</option>'; }).join('') +
       '<option value="bolsista"' + (V.fPag === 'bolsista' ? ' selected' : '') + '>bolsistas (' + nBolsistas + ')</option>' +
-      '<option value="cancelamento"' + (V.fPag === 'cancelamento' ? ' selected' : '') + '>cancelamento solicitado (' + nCancelamento + ')</option>' +
       '</select></div>' +
       '<table class="tabela"><thead><tr><th>Aluno</th><th>Turmas</th><th>Pagamento</th><th>Frequência</th><th>Rematrícula</th><th>Material</th><th></th></tr></thead><tbody>' +
       lista.map(function (a) {
         const turmasTxt = a.turmas.map(function (x) { return x.turma + ' (' + x.semestre + ')'; }).join(', ');
-        return '<tr' + (a.cancelado ? ' class="linha-cancelada"' : '') + '>' +
+        return '<tr>' +
           '<td><b>' + esc(a.nome) + '</b>' + (a.telefone ? ('<div class="muted">' + esc(a.telefone) + '</div>') : '') + '</td>' +
           '<td class="muted">' + esc(turmasTxt || '—') + '</td>' +
-          '<td>' + selosPagamentoAluno(a) + (a.cancelamento && a.cancelamento.solicitado && !a.cancelado ? ' <span class="tag tag-erro">Cancelamento solicitado</span>' : '') + '</td>' +
+          '<td>' + selosPagamentoAluno(a) + '</td>' +
           '<td class="muted">' + Object.keys(a.frequencia || {}).length + ' registro(s)</td>' +
           '<td>' + (a.rematricula.enviada ? '<span class="tag tag-ok">Enviada</span>' : '<span class="tag tag-neutro">Não enviada</span>') + '</td>' +
           '<td>' + (a.materialDidatico.enviado ? '<span class="tag tag-ok">Enviado</span>' : '<span class="tag tag-neutro">Não enviado</span>') + '</td>' +
@@ -1379,20 +1385,22 @@
     return '<div class="topo"><h1>Alunos</h1><div class="topo-acoes"><button class="btn sm" type="button" data-act="exportar-alunos-csv" data-aba="cancelados">Baixar lista (CSV)</button></div></div>' +
       linhaTotaisAlunos(nAtivos) +
       abasAlunos(nAtivos, cancelados.length) +
-      '<p class="muted">Alunos marcados como cancelados — saem da lista de Ativos, mas continuam aqui e na(s) turma(s) deles (com a tag "Cancelado"), guardando o histórico.</p>' +
+      '<p class="muted">Alunos cancelados (ou que já pediram cancelamento) — saem da lista de Ativos, mas continuam aqui e na(s) turma(s) deles (com a tag "Cancelado"), guardando o histórico.</p>' +
       '<div class="filtros">' +
       '<input type="search" placeholder="Buscar aluno cancelado por nome…" value="' + esc(V.buscaAlunoCancelado || '') + '" data-act="busca-aluno-cancelado">' +
       '</div>' +
-      (lista.length ? ('<table class="tabela"><thead><tr><th>Aluno</th><th>Turmas</th><th>Motivo do cancelamento</th><th></th></tr></thead><tbody>' +
+      (lista.length ? ('<table class="tabela"><thead><tr><th>Aluno</th><th>Turmas</th><th>Situação</th><th>Motivo do cancelamento</th><th></th></tr></thead><tbody>' +
         lista.map(function (a) {
           const turmasTxt = a.turmas.map(function (x) { return x.turma + ' (' + x.semestre + ')'; }).join(', ');
+          const situacao = a.cancelado ? '<span class="tag tag-erro">Cancelado</span>' : '<span class="tag tag-aviso">Cancelamento solicitado</span>';
           return '<tr class="linha-cancelada">' +
             '<td><b>' + esc(a.nome) + '</b>' + (a.telefone ? ('<div class="muted">' + esc(a.telefone) + '</div>') : '') + '</td>' +
             '<td class="muted">' + esc(turmasTxt || '—') + '</td>' +
+            '<td>' + situacao + '</td>' +
             '<td class="muted">' + esc((a.cancelamento && a.cancelamento.motivo) || '—') + '</td>' +
             '<td>' +
             '<button class="btn sm" type="button" data-act="ver-aluno" data-id="' + a.id + '">Abrir</button> ' +
-            '<button class="btn sm" type="button" data-act="cancelado-toggle" data-id="' + a.id + '">Reativar</button>' +
+            '<button class="btn sm" type="button" data-act="reativar-aluno" data-id="' + a.id + '">Reativar</button>' +
             '</td>' +
             '</tr>';
         }).join('') + '</tbody></table>') : '<p class="muted">Nenhum aluno cancelado.</p>');
@@ -1423,6 +1431,7 @@
       '<div class="check"><label><input type="checkbox" data-act="livro-comprado-aluno" data-id="' + a.id + '"' + (a.livroDidatico.comprado ? ' checked' : '') + '> Já comprou o livro/material didático</label></div>' +
       '<h3>Cancelamento</h3>' +
       '<div class="check"><label><input type="checkbox" data-act="cancelamento-toggle" data-id="' + a.id + '"' + (a.cancelamento.solicitado ? ' checked' : '') + '> Aluno solicitou cancelamento</label></div>' +
+      '<p class="muted">Marcar essa caixa já tira o aluno da lista de Ativos e manda ele pra aba Cancelados (mesmo antes de marcar "Cancelado" de fato).</p>' +
       (a.cancelamento.solicitado ? (
         '<div class="campos-matricula">' +
         '<div class="campo"><label>Data do pedido</label><input type="date" data-act="cancelamento-data" data-id="' + a.id + '" value="' + esc(a.cancelamento.data || '') + '"></div>' +
@@ -1697,6 +1706,18 @@
       // Clicando "Reativar" direto na lista da aba Cancelados, não precisa abrir o cadastro.
       const dlg = $('#dlg');
       if (dlg && dlg.open) dlgAluno(a.id);
+    },
+    /* "Reativar" na lista da aba Cancelados: limpa tanto o cancelamento efetivo quanto um pedido
+       de cancelamento pendente, porque o aluno pode estar ali por qualquer um dos dois motivos. */
+    'reativar-aluno': function (el) {
+      const a = D.alunoPorId[el.dataset.id];
+      if (!a) return;
+      a.cancelado = false;
+      if (a.cancelamento) a.cancelamento.solicitado = false;
+      LS.set('alunos', S.alunos);
+      registrar('Reativou aluno', a.nome);
+      toast('Aluno reativado.');
+      render();
     },
     'excluir-aluno': function (el) {
       const a = D.alunoPorId[el.dataset.id];
