@@ -9,7 +9,7 @@
 
   /* ---------- Armazenamento local (por navegador) + sincronização opcional entre navegadores ---------- */
   const Sync = window.Sync || { configured: function () { return false; }, init: function () {}, push: function () { return Promise.resolve(false); } };
-  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados'];
+  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados', 'duplicadosIgnorados'];
   const LS = {
     get: function (k, def) { try { const v = localStorage.getItem('washington.' + k); return v == null ? def : JSON.parse(v); } catch (e) { return def; } },
     set: function (k, v) {
@@ -26,7 +26,7 @@
     professores: LS.get('professores', null) || (DATA.professores || []).map(function (p) { return Object.assign({}, p); }),
     turmas: LS.get('turmas', null) || (DATA.turmas || []).map(function (t) { return Object.assign({}, t); }),
     alunos: alunosSalvos || (DATA.alunos || []).map(function (a) {
-      return Object.assign({ formaPagamento: 'desconhecido', email: '', bolsista: false, cancelado: false, dataInicio: '', responsavelFinanceiro: '' }, a, {
+      return Object.assign({ formaPagamento: 'desconhecido', email: '', bolsista: false, cancelado: false, dataInicio: '', responsavelFinanceiro: '', rg: '', cpf: '', dataNascimento: '', endereco: '', cep: '', diaVencimento: '' }, a, {
         pagamento: Object.assign({ valorEmAberto: '' }, a.pagamento), frequencia: Object.assign({}, a.frequencia),
         materialDidatico: Object.assign({}, a.materialDidatico), rematricula: Object.assign({}, a.rematricula),
         livroDidatico: Object.assign({ qual: '', comprado: false, mensagemEnviada: false }, a.livroDidatico),
@@ -45,6 +45,7 @@
     despesas: LS.get('despesas', []),
     pendencias: LS.get('pendencias', []),
     comunicados: LS.get('comunicados', []),
+    duplicadosIgnorados: LS.get('duplicadosIgnorados', []),
   };
 
   /* ---------- Garante que alunos já salvos (ou sincronizados de outro navegador) antes destes
@@ -67,6 +68,12 @@
       if (a.cancelado == null) a.cancelado = false;
       if (a.email == null) a.email = '';
       if (a.responsavelFinanceiro == null) a.responsavelFinanceiro = '';
+      if (a.rg == null) a.rg = '';
+      if (a.cpf == null) a.cpf = '';
+      if (a.dataNascimento == null) a.dataNascimento = '';
+      if (a.endereco == null) a.endereco = '';
+      if (a.cep == null) a.cep = '';
+      if (a.diaVencimento == null) a.diaVencimento = '';
     });
     return lista;
   }
@@ -91,6 +98,7 @@
   })();
   const params = new URLSearchParams(location.search);
   const HOJE = /^\d{4}-\d{2}-\d{2}$/.test(params.get('hoje') || '') ? params.get('hoje') : new Date().toISOString().slice(0, 10);
+  const ASAAS_DASHBOARD_URL = 'https://www.asaas.com/dashboard/index';
   // Minutos desde meia-noite agora — usado pra saber quais turmas do dia já aconteceram. Aceita
   // "?agora=HH:MM" (igual ao "?hoje=") só pra dar pra testar de forma previsível; no uso real
   // (sem o parâmetro) usa o horário de verdade do relógio.
@@ -102,10 +110,11 @@
   })();
   const V = {
     view: 'semana', semestre: L.semestreDeData(HOJE), fProf: '', fSit: '', buscaTurma: '', buscaAluno: '', buscaAlunoCancelado: '', fPag: '', syncStatus: 'sem-config',
-    semanaOffset: 0, semanaModo: 'semana', diaOffsetDias: 0,
+    semanaOffset: 0, semanaModo: 'mes', diaOffsetDias: 0, mesOffset: 0, alunosAba: 'ativos',
     novaMatricula: {
       alunoId: '', alunoNome: '', turmaId: '', dataInicio: '', dataPagamento: '', formaPagamento: 'asaas',
       valorMensalidade: '', valorMaterial: '', livro: '', descontoTem: false, descontoValor: '', descontoObs: '',
+      rg: '', cpf: '', dataNascimento: '', endereco: '', cep: '', diaVencimento: '',
     },
     novoCompromisso: { titulo: '', alunoId: '', alunoNome: '', comQuem: 'Isa', data: '', horario: '', local: '', obs: '' },
     chamadaTurmaId: '', chamadaData: HOJE, chamadaPresencas: {},
@@ -188,7 +197,7 @@
     { id: 'semana', nome: 'Semana' }, { id: 'pendencias', nome: 'Pendências' }, { id: 'turmas', nome: 'Turmas' }, { id: 'matriculas', nome: 'Matrículas' },
     { id: 'compromissos', nome: 'Compromissos' }, { id: 'frequencia', nome: 'Frequência' }, { id: 'inadimplencia', nome: 'Inadimplência' },
     { id: 'material', nome: 'Material' }, { id: 'entradas', nome: 'Entradas' }, { id: 'despesas', nome: 'Despesas' },
-    { id: 'alunos', nome: 'Alunos' }, { id: 'cancelados', nome: 'Cancelados' }, { id: 'comunicados', nome: 'Comunicados' },
+    { id: 'alunos', nome: 'Alunos' }, { id: 'comunicados', nome: 'Comunicados' },
     { id: 'professores', nome: 'Professores' }, { id: 'conferencia', nome: 'Conferência' },
     { id: 'buscar', nome: 'Buscar' }, { id: 'dados', nome: 'Dados' }
   ];
@@ -303,7 +312,7 @@
     app.innerHTML = ({
       semana: viewSemana, pendencias: viewPendencias, turmas: viewTurmas, matriculas: viewMatriculas, compromissos: viewCompromissos,
       frequencia: viewFrequencia, inadimplencia: viewInadimplencia, material: viewMaterial, entradas: viewEntradas, despesas: viewDespesas,
-      alunos: viewAlunos, cancelados: viewCancelados, comunicados: viewComunicados, professores: viewProfessores,
+      alunos: viewAlunos, comunicados: viewComunicados, professores: viewProfessores,
       conferencia: viewConferencia, buscar: viewBuscar, dados: viewDados
     }[V.view] || viewSemana)();
     if (!restaurarFoco(app, foco)) app.focus();
@@ -374,8 +383,26 @@
     return '<details class="ja-aconteceu"><summary>Já aconteceu hoje (' + passadas.length + ')</summary>' +
       passadas.map(itemTurmaHTML).join('') + '</details>';
   }
+  /* Alternador de modo (Mês / Semana inteira / Só um dia), repetido nos 3 jeitos de ver a agenda. */
+  function botoesModoSemana() {
+    return '<div class="semana-modo">' +
+      '<button class="btn sm' + (V.semanaModo === 'mes' ? ' on' : '') + '" type="button" data-act="semana-modo" data-m="mes">Mês</button>' +
+      '<button class="btn sm' + (V.semanaModo === 'semana' ? ' on' : '') + '" type="button" data-act="semana-modo" data-m="semana">Semana inteira</button>' +
+      '<button class="btn sm' + (V.semanaModo === 'dia' ? ' on' : '') + '" type="button" data-act="semana-modo" data-m="dia">Só um dia</button>' +
+      '</div>';
+  }
+  function legendaProfs() {
+    if (!(D.profsOrdenados.length > 1)) return '';
+    const legenda = D.profsOrdenados.map(function (nome) {
+      const oculto = V.semProfsOcultos[nome];
+      return '<button class="legenda-prof' + (oculto ? ' off' : '') + '" type="button" data-act="semana-prof-toggle" data-prof="' + esc(nome) + '">' +
+        '<span class="legenda-bolha" style="--pc:' + corDoProfessor(nome) + '"></span>' + esc(nome) + '</button>';
+    }).join('');
+    return '<div class="legenda-profs"><span class="muted legenda-dica">Clique para destacar só as turmas de um(a) professor(a):</span>' + legenda + (Object.keys(V.semProfsOcultos).length ? '<button class="btn sm" type="button" data-act="semana-prof-limpar">Mostrar todos</button>' : '') + '</div>';
+  }
   function viewSemana() {
     if (V.semanaModo === 'dia') return viewDia();
+    if (V.semanaModo === 'mes') return viewMes();
     const segunda = L.somaDias(L.segundaDaSemana(HOJE), V.semanaOffset * 7);
     const semestreSemana = L.semestreDeData(segunda);
     const turmasDoSemestreTodas = S.turmas.filter(function (t) { return t.semestre === semestreSemana && t.situacao !== 'A confirmar'; });
@@ -402,19 +429,14 @@
         (vazio ? '<div class="grade-vazio">—</div>' : '') + '</div>';
     }).join('');
     const faixa = L.fmtCurta(segunda) + ' – ' + L.fmtCurta(L.somaDias(segunda, 6)) + ' · semestre ' + semestreSemana;
-    const legenda = D.profsOrdenados.map(function (nome) {
-      const oculto = V.semProfsOcultos[nome];
-      return '<button class="legenda-prof' + (oculto ? ' off' : '') + '" type="button" data-act="semana-prof-toggle" data-prof="' + esc(nome) + '">' +
-        '<span class="legenda-bolha" style="--pc:' + corDoProfessor(nome) + '"></span>' + esc(nome) + '</button>';
-    }).join('');
     return '<div class="topo"><h1>Semana</h1><div class="topo-acoes">' +
-      '<div class="semana-modo"><button class="btn sm on" type="button" data-act="semana-modo" data-m="semana">Semana inteira</button><button class="btn sm" type="button" data-act="semana-modo" data-m="dia">Só um dia</button></div>' +
+      botoesModoSemana() +
       '<button class="btn sm" type="button" data-act="semana-nav" data-d="-1">← Semana anterior</button>' +
       '<button class="btn sm" type="button" data-act="semana-nav" data-d="0">Hoje</button>' +
       '<button class="btn sm" type="button" data-act="semana-nav" data-d="1">Próxima semana →</button>' +
       '</div></div>' +
       '<p class="muted">' + esc(faixa) + '</p>' +
-      (D.profsOrdenados.length > 1 ? ('<div class="legenda-profs"><span class="muted legenda-dica">Clique para destacar só as turmas de um(a) professor(a):</span>' + legenda + (Object.keys(V.semProfsOcultos).length ? '<button class="btn sm" type="button" data-act="semana-prof-limpar">Mostrar todos</button>' : '') + '</div>') : '') +
+      legendaProfs() +
       '<div class="grade">' + colunas + '</div>' +
       (confirmar.length ? ('<h2 class="subtitulo">Turmas em formação (' + confirmar.length + ')</h2><p class="muted">A confirmar ou ainda sem nenhum aluno matriculado — por isso não aparecem na grade acima.</p><div class="lista-cards">' + confirmar.map(function (t) { return cardTurma(t); }).join('') + '</div>') : '');
   }
@@ -439,7 +461,7 @@
       .sort(function (a, b) { return a.ini - b.ini; });
     const vazio = !eventos.length && !sep.passadas.length;
     return '<div class="topo"><h1>Semana</h1><div class="topo-acoes">' +
-      '<div class="semana-modo"><button class="btn sm" type="button" data-act="semana-modo" data-m="semana">Semana inteira</button><button class="btn sm on" type="button" data-act="semana-modo" data-m="dia">Só um dia</button></div>' +
+      botoesModoSemana() +
       '<button class="btn sm" type="button" data-act="dia-nav" data-d="-1">← Dia anterior</button>' +
       '<button class="btn sm" type="button" data-act="dia-nav" data-d="0">Hoje</button>' +
       '<button class="btn sm" type="button" data-act="dia-nav" data-d="1">Próximo dia →</button>' +
@@ -449,6 +471,66 @@
       (eventos.length ? eventos.map(function (e) { return e.html; }).join('') : (vazio ? '<div class="grade-vazio">Nenhuma turma ou compromisso neste dia.</div>' : '')) +
       blocoJaAconteceu(sep.passadas) +
       '</div>';
+  }
+
+  /* ---------- Semana, modo "Mês": grade mensal (estilo calendário), uma bolinha/linha colorida
+     por professor em cada dia — visão mais fácil de enxergar a rotina do mês inteiro de uma vez.
+     Toque num dia pra ver as turmas e compromissos daquele dia (mesma vista do modo "Só um dia"). ---------- */
+  const NOMES_MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro'];
+  function viewMes() {
+    function pad2(n) { return (n < 10 ? '0' : '') + n; }
+    function isoLocal(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+    const hojeD = new Date(HOJE + 'T00:00:00');
+    const totalMeses = hojeD.getMonth() + V.mesOffset;
+    const ano = hojeD.getFullYear() + Math.floor(totalMeses / 12);
+    const mes = ((totalMeses % 12) + 12) % 12;
+    const primeiroDia = new Date(ano, mes, 1);
+    const ultimoDia = new Date(ano, mes + 1, 0);
+    const inicioGrade = new Date(primeiroDia);
+    inicioGrade.setDate(inicioGrade.getDate() - ((primeiroDia.getDay() + 6) % 7));
+    const fimGrade = new Date(ultimoDia);
+    fimGrade.setDate(fimGrade.getDate() + (6 - ((ultimoDia.getDay() + 6) % 7)));
+    const dias = [];
+    for (let d = new Date(inicioGrade); d.getTime() <= fimGrade.getTime(); d.setDate(d.getDate() + 1)) dias.push(new Date(d));
+    const tituloMes = NOMES_MESES[mes] + ' de ' + ano;
+    const semestresDoMes = Array.from(new Set([L.semestreDeData(isoLocal(primeiroDia)), L.semestreDeData(isoLocal(ultimoDia))]));
+    const turmasDoMes = S.turmas.filter(function (t) { return semestresDoMes.indexOf(t.semestre) > -1 && t.situacao !== 'A confirmar' && (t.alunosNomes || []).length > 0; });
+    D.profsOrdenados = Array.from(new Set(turmasDoMes.map(function (t) { return t.professor || '—'; }))).sort();
+    const MAX_VISIVEIS = 3;
+    const celulas = dias.map(function (d) {
+      const dataISO = isoLocal(d);
+      const noMesAtual = d.getMonth() === mes;
+      const ehHoje = dataISO === HOJE;
+      const diaId = L.diaDaSemana(dataISO);
+      const semestreDia = L.semestreDeData(dataISO);
+      const turmasDoDia = turmasDoMes.filter(function (t) { return t.semestre === semestreDia && L.diasDaTurma(t.dia).indexOf(diaId) > -1; });
+      const compromissosDoDia = S.compromissos.filter(function (c) { return c.data === dataISO && c.status === 'agendado'; });
+      const eventos = turmasDoDia.map(function (t) {
+        const hm = L.horarioMin(t.horario);
+        const oculto = V.semProfsOcultos[t.professor || '—'];
+        return { ini: hm ? hm[0] : 9999, html: '<div class="mes-item' + (oculto ? ' dim' : '') + '" style="--pc:' + corDoProfessor(t.professor) + '">' + esc((t.horario || '').split(' ')[0] || '') + ' ' + esc(t.turma) + '</div>' };
+      }).concat(compromissosDoDia.map(function (c) {
+        const m = L.horaParaMin(c.horario);
+        return { ini: m == null ? 9999 : m, html: '<div class="mes-item mes-item-compromisso">📅 ' + esc(c.titulo) + '</div>' };
+      })).sort(function (a, b) { return a.ini - b.ini; });
+      const visiveis = eventos.slice(0, MAX_VISIVEIS);
+      const sobrando = eventos.length - visiveis.length;
+      return '<div class="mes-dia' + (noMesAtual ? '' : ' fora-do-mes') + (ehHoje ? ' hoje' : '') + '" data-act="mes-abrir-dia" data-data="' + dataISO + '">' +
+        '<div class="mes-dia-num">' + d.getDate() + '</div>' +
+        '<div class="mes-dia-itens">' + visiveis.map(function (e) { return e.html; }).join('') + (sobrando > 0 ? ('<div class="mes-mais">+' + sobrando + ' mais</div>') : '') + '</div>' +
+        '</div>';
+    }).join('');
+    return '<div class="topo"><h1>Semana</h1><div class="topo-acoes">' +
+      botoesModoSemana() +
+      '<button class="btn sm" type="button" data-act="mes-nav" data-d="-1">← Mês anterior</button>' +
+      '<button class="btn sm" type="button" data-act="mes-nav" data-d="0">Hoje</button>' +
+      '<button class="btn sm" type="button" data-act="mes-nav" data-d="1">Próximo mês →</button>' +
+      '</div></div>' +
+      '<p class="muted">' + esc(tituloMes) + '</p>' +
+      legendaProfs() +
+      '<div class="mes-cabecalho">' + L.DIAS_ORDEM.map(function (d) { return '<div>' + d + '</div>'; }).join('') + '</div>' +
+      '<div class="mes-grade">' + celulas + '</div>' +
+      '<p class="muted">Toque em um dia para ver as turmas e compromissos daquele dia.</p>';
   }
 
   /* ---------- Turmas ---------- */
@@ -599,7 +681,15 @@
       '<div class="campos-matricula">' +
       '<div class="campo"><label>Aluno (já cadastrado)</label><select data-act="nm-aluno"><option value="">— Novo aluno —</option>' +
       opcoesAluno.map(function (a) { return '<option value="' + a.id + '"' + (nm.alunoId === a.id ? ' selected' : '') + '>' + esc(a.nome) + '</option>'; }).join('') + '</select></div>' +
-      (!nm.alunoId ? '<div class="campo"><label>Nome do novo aluno</label><input type="text" data-act="nm-nome" value="' + esc(nm.alunoNome) + '" placeholder="Nome completo"></div>' : '') +
+      (!nm.alunoId ? (
+        '<div class="campo"><label>Nome do novo aluno</label><input type="text" data-act="nm-nome" value="' + esc(nm.alunoNome) + '" placeholder="Nome completo"></div>' +
+        '<div class="campo"><label>RG</label><input type="text" data-act="nm-rg" value="' + esc(nm.rg) + '" placeholder="Ex.: 12117893-3"></div>' +
+        '<div class="campo"><label>CPF</label><input type="text" data-act="nm-cpf" value="' + esc(nm.cpf) + '" placeholder="Ex.: 102.424.037-19"></div>' +
+        '<div class="campo"><label>Data de nascimento</label><input type="date" data-act="nm-data-nascimento" value="' + esc(nm.dataNascimento) + '"></div>' +
+        '<div class="campo"><label>Endereço completo</label><input type="text" data-act="nm-endereco" value="' + esc(nm.endereco) + '" placeholder="Rua, número, bloco/apto"></div>' +
+        '<div class="campo"><label>CEP</label><input type="text" data-act="nm-cep" value="' + esc(nm.cep) + '" placeholder="Ex.: 21911-180"></div>' +
+        '<div class="campo"><label>Dia de vencimento</label><input type="text" inputmode="numeric" data-act="nm-dia-vencimento" value="' + esc(nm.diaVencimento) + '" placeholder="Ex.: 20"></div>'
+      ) : '') +
       '<div class="campo"><label>Turma (semestre ' + esc(V.semestre) + ')</label><select data-act="nm-turma"><option value="">Selecione…</option>' +
       turmasDoSemestre.map(function (t) { return '<option value="' + t.id + '"' + (nm.turmaId === t.id ? ' selected' : '') + '>' + esc(t.turma) + ' · ' + esc(t.dia) + ' ' + esc(t.horario) + '</option>'; }).join('') + '</select></div>' +
       '<div class="campo"><label>Data de início</label><input type="date" data-act="nm-data" value="' + esc(nm.dataInicio) + '"></div>' +
@@ -779,7 +869,7 @@
     const atrasados = lista.filter(function (a) { return a.pagamento.status === 'atrasado'; });
     const pendentes = lista.filter(function (a) { return a.pagamento.status === 'pendente'; });
     const totalAberto = lista.reduce(function (soma, a) { const v = Number(a.pagamento.valorEmAberto); return soma + (isNaN(v) ? 0 : v); }, 0);
-    return '<div class="topo"><h1>Inadimplência</h1></div>' +
+    return '<div class="topo"><h1>Inadimplência</h1><div class="topo-acoes"><a class="btn sm" target="_blank" rel="noopener" href="' + ASAAS_DASHBOARD_URL + '">Abrir Asaas (situação financeira completa)</a></div></div>' +
       '<p class="muted">' + atrasados.length + ' atrasado(s) · ' + pendentes.length + ' pendente(s)' + (totalAberto ? (' · total em aberto informado: ' + fmtReais(totalAberto)) : '') + '</p>' +
       (lista.length ? ('<div class="lista-cards">' + lista.map(cardInadimplencia).join('') + '</div>') : '<p class="muted">Nenhum aluno atrasado ou pendente agora. 🎉</p>');
   }
@@ -1058,6 +1148,42 @@
     }
     return '<span class="tag ' + cls + '">' + texto + '</span>';
   }
+  /* ---------- Rematrículas próximas: quem está com o contrato vencendo nos próximos 30 dias
+     (ou já vencido e ainda ativo), pra aparecer destacado na aba Alunos em vez de só dentro do
+     cadastro de cada um. ---------- */
+  function alunosRematriculaProxima() {
+    return S.alunos.filter(function (a) { return !a.cancelado; })
+      .map(function (a) { return { aluno: a, info: rematriculaInfoAluno(a) }; })
+      .filter(function (x) { return x.info && x.info.dias != null && x.info.dias <= 30; })
+      .sort(function (x, y) { return x.info.dias - y.info.dias; });
+  }
+  function cardAlunoRematriculaProxima(x) {
+    const a = x.aluno, info = x.info;
+    const turma = a.turmas && a.turmas[0];
+    return '<div class="aviso aviso-atencao">' +
+      '<p><b>' + esc(a.nome) + '</b> · ' + tagRematricula(info) + '</p>' +
+      '<div class="ct-acoes">' +
+      '<button class="btn sm" type="button" data-act="ver-aluno" data-id="' + a.id + '">Abrir cadastro</button> ' +
+      (a.telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemRematricula(a, turma)) + '">Mandar WhatsApp de rematrícula</a>') : '<span class="muted">Sem telefone cadastrado</span>') +
+      '</div></div>';
+  }
+  /* ---------- Aniversariantes próximos: quem faz aniversário nos próximos 30 dias, pra lembrar
+     de mandar uma mensagem. Usa a data de nascimento cadastrada na matrícula/cadastro. ---------- */
+  function alunosAniversariantesProximos() {
+    return S.alunos.filter(function (a) { return !a.cancelado && a.dataNascimento; })
+      .map(function (a) { return { aluno: a, dias: L.diasAteAniversario(a.dataNascimento, HOJE) }; })
+      .filter(function (x) { return x.dias != null && x.dias <= 30; })
+      .sort(function (x, y) { return x.dias - y.dias; });
+  }
+  function cardAlunoAniversario(x) {
+    const a = x.aluno;
+    const quando = x.dias === 0 ? 'hoje! 🎂' : (x.dias === 1 ? 'amanhã' : ('em ' + x.dias + ' dia(s)'));
+    return '<div class="aviso aviso-atencao">' +
+      '<p><b>' + esc(a.nome) + '</b> · aniversário ' + quando + ' (' + esc(L.fmtCurta(a.dataNascimento)) + ')</p>' +
+      '<div class="ct-acoes">' +
+      (a.telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemAniversario(a)) + '">Mandar parabéns no WhatsApp</a>') : '<span class="muted">Sem telefone cadastrado</span>') +
+      '</div></div>';
+  }
   /* ---------- Detecta possíveis alunos duplicados (mesma pessoa cadastrada 2x) ----------
      Isso acontece sobretudo quando um aluno é digitado de novo (com nome incompleto, ex.: só
      "Amanda") numa turma diferente da que ele está de verdade. Critérios, do mais confiável
@@ -1116,10 +1242,18 @@
         grupos.push(grupo);
       }
     }
-    return grupos;
+    const ignorados = S.duplicadosIgnorados || [];
+    return grupos.filter(function (g) { return ignorados.indexOf(chaveGrupoDuplicado(g)) === -1; });
+  }
+  /* Identifica um grupo de "possível duplicado" de forma estável (ids ordenados), pra poder
+     marcar esse grupo específico como "não são a mesma pessoa, são irmãos/parentes mesmo" e ele
+     parar de aparecer aqui — sem precisar apagar nenhum cadastro. */
+  function chaveGrupoDuplicado(grupo) {
+    return grupo.map(function (a) { return a.id; }).sort().join(',');
   }
   function cardAlunoDuplicado(grupo) {
     const idsGrupo = grupo.map(function (a) { return a.id; }).join(',');
+    const chave = chaveGrupoDuplicado(grupo);
     return '<div class="aviso aviso-atencao dup-card">' +
       '<p><b>Possível aluno duplicado:</b></p>' +
       '<ul>' + grupo.map(function (a) {
@@ -1128,7 +1262,9 @@
       }).join('') + '</ul>' +
       '<div class="dup-acoes">' + grupo.map(function (a) {
         return '<button class="btn sm" type="button" data-act="dup-mesclar" data-manter="' + a.id + '" data-grupo="' + idsGrupo + '">Manter "' + esc(a.nome) + '" e mesclar o(s) outro(s) aqui</button>';
-      }).join(' ') + '</div>' +
+      }).join(' ') +
+      ' <button class="btn sm" type="button" data-act="dup-ignorar" data-chave="' + esc(chave) + '">Não são a mesma pessoa (são parentes/homônimos)</button>' +
+      '</div>' +
       '</div>';
   }
   /* Linha de totais que aparece em cima das abas Alunos/Cancelados — visão rápida de tamanho da
@@ -1139,7 +1275,16 @@
       '<div class="stat-tile"><b>' + S.turmas.length + '</b><span>turma(s) no total</span></div>' +
       '</div>';
   }
-  function viewAlunos() {
+  /* ---------- Alunos: tem uma sub-aba "Cancelados" dentro do próprio menu de Alunos (não é mais
+     um item separado na barra lateral) — quem já saiu continua no sistema e na(s) turma(s) dele
+     (histórico preservado), só não disputa espaço com os ativos na lista principal. ---------- */
+  function abasAlunos(nAtivos, nCancelados) {
+    return '<div class="semana-modo">' +
+      '<button class="btn sm' + (V.alunosAba !== 'cancelados' ? ' on' : '') + '" type="button" data-act="alunos-aba" data-aba="ativos">Ativos (' + nAtivos + ')</button>' +
+      '<button class="btn sm' + (V.alunosAba === 'cancelados' ? ' on' : '') + '" type="button" data-act="alunos-aba" data-aba="cancelados">Cancelados (' + nCancelados + ')</button>' +
+      '</div>';
+  }
+  function alunosAtivosFiltrados() {
     const ativos = S.alunos.filter(function (a) { return !a.cancelado; });
     let lista = ativos.slice();
     if (V.buscaAluno) {
@@ -1150,16 +1295,59 @@
     else if (V.fPag === 'cancelamento') lista = lista.filter(function (a) { return a.cancelamento && a.cancelamento.solicitado; });
     else if (V.fPag) lista = lista.filter(function (a) { return (a.pagamento.status || 'desconhecido') === V.fPag; });
     lista.sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
+    return lista;
+  }
+  function alunosCanceladosFiltrados() {
+    let lista = S.alunos.filter(function (a) { return a.cancelado; });
+    if (V.buscaAlunoCancelado) {
+      const q = L.norm(V.buscaAlunoCancelado);
+      lista = lista.filter(function (a) { return L.norm(a.nome).indexOf(q) > -1; });
+    }
+    lista.sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
+    return lista;
+  }
+  /* Baixa uma lista de linhas como .csv (separador ";", compatível com Excel em pt-BR). */
+  function baixarCSV(nomeArquivo, cabecalhos, linhas) {
+    function campoCSV(v) {
+      const s = String(v == null ? '' : v);
+      return /["\n;]/.test(s) ? ('"' + s.replace(/"/g, '""') + '"') : s;
+    }
+    const conteudo = [cabecalhos].concat(linhas).map(function (linha) { return linha.map(campoCSV).join(';'); }).join('\r\n');
+    const blob = new Blob(['﻿' + conteudo], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url; link.download = nomeArquivo;
+    document.body.appendChild(link); link.click(); document.body.removeChild(link);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
+  }
+  function viewAlunos() {
+    const ativos = S.alunos.filter(function (a) { return !a.cancelado; });
+    const cancelados = S.alunos.filter(function (a) { return a.cancelado; });
+    if (V.alunosAba === 'cancelados') return viewAlunosCancelados(ativos.length, cancelados);
+    const lista = alunosAtivosFiltrados();
     const resumo = { 'em dia': 0, atrasado: 0, pendente: 0, desconhecido: 0 };
     let nBolsistas = 0, nCancelamento = 0;
     ativos.forEach(function (a) { const s = a.pagamento.status || 'desconhecido'; resumo[s] = (resumo[s] || 0) + 1; if (a.bolsista) nBolsistas++; if (a.cancelamento && a.cancelamento.solicitado) nCancelamento++; });
     const grupoDuplicados = alunosDuplicadosProvaveis();
-    return '<div class="topo"><h1>Alunos (' + ativos.length + ')</h1></div>' +
+    const rematriculasProximas = alunosRematriculaProxima();
+    const aniversariantes = alunosAniversariantesProximos();
+    return '<div class="topo"><h1>Alunos (' + ativos.length + ')</h1><div class="topo-acoes"><button class="btn sm" type="button" data-act="exportar-alunos-csv" data-aba="ativos">Baixar lista (CSV)</button></div></div>' +
       linhaTotaisAlunos(ativos.length) +
+      abasAlunos(ativos.length, cancelados.length) +
       (grupoDuplicados.length ? (
         '<h2 class="subtitulo">Possíveis duplicados (' + grupoDuplicados.length + ')</h2>' +
         '<p class="muted">Mesmo telefone ou nome parecido em mais de um cadastro — provavelmente a mesma pessoa cadastrada 2x. Escolha qual cadastro manter; os outros são mesclados nele (turmas, matrículas e histórico passam a contar para o que ficar) e removidos da lista.</p>' +
         grupoDuplicados.map(cardAlunoDuplicado).join('')
+      ) : '') +
+      (rematriculasProximas.length ? (
+        '<h2 class="subtitulo">Rematrículas próximas (' + rematriculasProximas.length + ')</h2>' +
+        '<p class="muted">Contrato vencendo nos próximos 30 dias (ou já vencido) — hora de confirmar a rematrícula com a família.</p>' +
+        rematriculasProximas.map(cardAlunoRematriculaProxima).join('')
+      ) : '') +
+      (aniversariantes.length ? (
+        '<h2 class="subtitulo">Aniversariantes (' + aniversariantes.length + ')</h2>' +
+        '<p class="muted">Aniversários nos próximos 30 dias.</p>' +
+        aniversariantes.map(cardAlunoAniversario).join('')
       ) : '') +
       '<div class="filtros">' +
       '<input type="search" placeholder="Buscar aluno por nome…" value="' + esc(V.buscaAluno) + '" data-act="busca-aluno">' +
@@ -1186,17 +1374,12 @@
       }).join('') + '</tbody></table>';
   }
 
-  /* ---------- Cancelados: aba própria pra quem já saiu, separada da lista principal de Alunos
-     (continuam no sistema — histórico de turma preservado — só não disputam espaço ali). ---------- */
-  function viewCancelados() {
-    let lista = S.alunos.filter(function (a) { return a.cancelado; });
-    if (V.buscaAlunoCancelado) {
-      const q = L.norm(V.buscaAlunoCancelado);
-      lista = lista.filter(function (a) { return L.norm(a.nome).indexOf(q) > -1; });
-    }
-    lista.sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
-    return '<div class="topo"><h1>Cancelados (' + lista.length + ')</h1></div>' +
-      '<p class="muted">Alunos marcados como cancelados — saem da lista principal de Alunos, mas continuam aqui e na(s) turma(s) deles (com a tag "Cancelado"), guardando o histórico.</p>' +
+  function viewAlunosCancelados(nAtivos, cancelados) {
+    const lista = alunosCanceladosFiltrados();
+    return '<div class="topo"><h1>Alunos</h1><div class="topo-acoes"><button class="btn sm" type="button" data-act="exportar-alunos-csv" data-aba="cancelados">Baixar lista (CSV)</button></div></div>' +
+      linhaTotaisAlunos(nAtivos) +
+      abasAlunos(nAtivos, cancelados.length) +
+      '<p class="muted">Alunos marcados como cancelados — saem da lista de Ativos, mas continuam aqui e na(s) turma(s) deles (com a tag "Cancelado"), guardando o histórico.</p>' +
       '<div class="filtros">' +
       '<input type="search" placeholder="Buscar aluno cancelado por nome…" value="' + esc(V.buscaAlunoCancelado || '') + '" data-act="busca-aluno-cancelado">' +
       '</div>' +
@@ -1229,6 +1412,12 @@
       '<div class="campo"><label>Onde paga</label><select data-act="forma-pagamento-aluno" data-id="' + a.id + '"><option value="asaas"' + (a.formaPagamento !== 'unidade' ? ' selected' : '') + '>Pelo Asaas</option><option value="unidade"' + (a.formaPagamento === 'unidade' ? ' selected' : '') + '>Na unidade (não entra na importação do Asaas)</option></select></div>' +
       '<div class="campo"><label>Nome de quem paga no Asaas (se for diferente do aluno)</label><input type="text" data-act="responsavel-financeiro-aluno" data-id="' + a.id + '" value="' + esc(a.responsavelFinanceiro || '') + '" placeholder="Ex.: nome do pai/mãe, se o boleto vier no nome dele(a)"></div>' +
       '<div class="campo"><label>Data que iniciou com a gente</label><input type="date" data-act="data-inicio-aluno" data-id="' + a.id + '" value="' + esc(a.dataInicio || '') + '"></div>' +
+      '<div class="campo"><label>RG</label><input type="text" data-act="rg-aluno" data-id="' + a.id + '" value="' + esc(a.rg || '') + '" placeholder="Ex.: 12117893-3"></div>' +
+      '<div class="campo"><label>CPF</label><input type="text" data-act="cpf-aluno" data-id="' + a.id + '" value="' + esc(a.cpf || '') + '" placeholder="Ex.: 102.424.037-19"></div>' +
+      '<div class="campo"><label>Data de nascimento</label><input type="date" data-act="data-nascimento-aluno" data-id="' + a.id + '" value="' + esc(a.dataNascimento || '') + '"></div>' +
+      '<div class="campo"><label>Endereço completo</label><input type="text" data-act="endereco-aluno" data-id="' + a.id + '" value="' + esc(a.endereco || '') + '" placeholder="Rua, número, bloco/apto"></div>' +
+      '<div class="campo"><label>CEP</label><input type="text" data-act="cep-aluno" data-id="' + a.id + '" value="' + esc(a.cep || '') + '" placeholder="Ex.: 21911-180"></div>' +
+      '<div class="campo"><label>Dia de vencimento</label><input type="text" inputmode="numeric" data-act="dia-vencimento-aluno" data-id="' + a.id + '" value="' + esc(a.diaVencimento || '') + '" placeholder="Ex.: 20"></div>' +
       '</div>' +
       '<div class="check"><label><input type="checkbox" data-act="bolsista-aluno" data-id="' + a.id + '"' + (a.bolsista ? ' checked' : '') + '> Aluno bolsista (não entra na cobrança/inadimplência)</label></div>' +
       '<div class="check"><label><input type="checkbox" data-act="livro-comprado-aluno" data-id="' + a.id + '"' + (a.livroDidatico.comprado ? ' checked' : '') + '> Já comprou o livro/material didático</label></div>' +
@@ -1301,6 +1490,11 @@
   function viewDados() {
     const asaas = S.asaasImportado;
     return '<div class="topo"><h1>Dados</h1></div>' +
+      '<section class="bloco">' +
+      '<h2>Asaas</h2>' +
+      '<p class="muted">Atrasos, boletos e detalhes financeiros ficam no próprio Asaas — aqui é só o resumo por aluno.</p>' +
+      '<a class="btn sm" target="_blank" rel="noopener" href="' + ASAAS_DASHBOARD_URL + '">Abrir o Asaas (entender situação financeira completa)</a>' +
+      '</section>' +
       '<section class="bloco">' +
       '<h2>Importar relatório do Asaas (pagamentos)</h2>' +
       '<p class="muted">Exporte o relatório de cobranças do Asaas em CSV e importe aqui para atualizar a situação de pagamento dos alunos. O pareamento é feito pelo nome do cliente — confira os que não encontrarem correspondência.</p>' +
@@ -1400,6 +1594,17 @@
     'semana-nav': function (el) { const d = Number(el.dataset.d); V.semanaOffset = d === 0 ? 0 : V.semanaOffset + d; render(); },
     'semana-modo': function (el) { V.semanaModo = el.dataset.m; render(); },
     'dia-nav': function (el) { const d = Number(el.dataset.d); V.diaOffsetDias = d === 0 ? 0 : V.diaOffsetDias + d; render(); },
+    'mes-nav': function (el) { const d = Number(el.dataset.d); V.mesOffset = d === 0 ? 0 : V.mesOffset + d; render(); },
+    'mes-abrir-dia': function (el) {
+      const dataISO = el.dataset.data;
+      if (!dataISO) return;
+      V.diaOffsetDias = L.diasAte(dataISO, HOJE);
+      const d = new Date(dataISO + 'T00:00:00');
+      const hojeD = new Date(HOJE + 'T00:00:00');
+      V.mesOffset = (d.getFullYear() - hojeD.getFullYear()) * 12 + (d.getMonth() - hojeD.getMonth());
+      V.semanaModo = 'dia';
+      render();
+    },
     'semana-prof-toggle': function (el) {
       const nome = el.dataset.prof;
       if (V.semProfsOcultos[nome]) delete V.semProfsOcultos[nome]; else V.semProfsOcultos[nome] = true;
@@ -1411,6 +1616,26 @@
     'filtro-pag': function (el) { V.fPag = el.value; render(); },
     'busca-aluno': function (el) { V.buscaAluno = el.value; render(); },
     'busca-aluno-cancelado': function (el) { V.buscaAlunoCancelado = el.value; render(); },
+    'alunos-aba': function (el) { V.alunosAba = el.dataset.aba; render(); },
+    'exportar-alunos-csv': function (el) {
+      const aba = el.dataset.aba;
+      if (aba === 'cancelados') {
+        const lista = alunosCanceladosFiltrados();
+        const linhas = lista.map(function (a) {
+          const turmasTxt = (a.turmas || []).map(function (x) { return x.turma + ' (' + x.semestre + ')'; }).join(', ');
+          return [a.nome, a.telefone || '', turmasTxt, (a.cancelamento && a.cancelamento.motivo) || ''];
+        });
+        baixarCSV('alunos-cancelados.csv', ['Nome', 'Telefone', 'Turmas', 'Motivo do cancelamento'], linhas);
+      } else {
+        const lista = alunosAtivosFiltrados();
+        const linhas = lista.map(function (a) {
+          const turmasTxt = (a.turmas || []).map(function (x) { return x.turma + ' (' + x.semestre + ')'; }).join(', ');
+          return [a.nome, a.telefone || '', a.email || '', turmasTxt, a.pagamento.status || 'desconhecido', a.rg || '', a.cpf || '', a.dataNascimento || '', a.endereco || '', a.cep || '', a.diaVencimento || ''];
+        });
+        baixarCSV('alunos-ativos.csv', ['Nome', 'Telefone', 'E-mail', 'Turmas', 'Pagamento', 'RG', 'CPF', 'Data de nascimento', 'Endereço', 'CEP', 'Dia de vencimento'], linhas);
+      }
+      registrar('Exportou lista de alunos em CSV', aba === 'cancelados' ? 'Cancelados' : 'Ativos');
+    },
     'busca-geral': function (el) { V.buscaTurma = el.value; render(); },
     'tel-prof': function (el) { S.professores[Number(el.dataset.i)].telefone = el.value; LS.set('professores', S.professores); registrar('Editou telefone de professor', S.professores[Number(el.dataset.i)].nome); },
     'tel-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.telefone = el.value; LS.set('alunos', S.alunos); registrar('Editou telefone de aluno', a.nome); render(); } },
@@ -1532,12 +1757,31 @@
       toast('Cadastro(s) mesclado(s) em "' + manter.nome + '".');
       recalc(); render();
     },
+    /* Marca um grupo específico de "possível duplicado" como gente diferente mesmo (ex.: dois
+       irmãos usando o mesmo telefone da família) — ele para de aparecer como aviso de duplicado,
+       sem apagar ou mexer em nenhum dos cadastros. */
+    'dup-ignorar': function (el) {
+      const chave = el.dataset.chave || '';
+      if (!chave) return;
+      S.duplicadosIgnorados = S.duplicadosIgnorados || [];
+      if (S.duplicadosIgnorados.indexOf(chave) === -1) S.duplicadosIgnorados.push(chave);
+      LS.set('duplicadosIgnorados', S.duplicadosIgnorados);
+      registrar('Marcou possível duplicado como pessoas diferentes', chave);
+      toast('Marcado: não são a mesma pessoa. Esse aviso não aparece mais para esses cadastros.');
+      recalc(); render();
+    },
     'marcar-rematricula': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.rematricula.enviada = true; a.rematricula.data = new Date().toISOString(); LS.set('alunos', S.alunos); registrar('Marcou mensagem de rematrícula como enviada', a.nome); } },
     'marcar-material': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.materialDidatico.enviado = true; a.materialDidatico.data = new Date().toISOString(); LS.set('alunos', S.alunos); registrar('Marcou material didático como enviado', a.nome); } },
     'salvar-autor': function (el) { S.cfg.autor = el.value; LS.set('cfg', S.cfg); },
     'forma-pagamento-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.formaPagamento = el.value; LS.set('alunos', S.alunos); registrar('Definiu forma de pagamento', a.nome + ' → ' + el.value); render(); } },
     'livro-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.livroDidatico.qual = el.value; LS.set('alunos', S.alunos); } },
     'data-inicio-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.dataInicio = el.value; LS.set('alunos', S.alunos); } },
+    'rg-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.rg = el.value; LS.set('alunos', S.alunos); } },
+    'cpf-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cpf = el.value; LS.set('alunos', S.alunos); } },
+    'data-nascimento-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.dataNascimento = el.value; LS.set('alunos', S.alunos); } },
+    'endereco-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.endereco = el.value; LS.set('alunos', S.alunos); } },
+    'cep-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cep = el.value; LS.set('alunos', S.alunos); } },
+    'dia-vencimento-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.diaVencimento = el.value; LS.set('alunos', S.alunos); } },
     'livro-comprado-aluno': function (el) {
       const a = D.alunoPorId[el.dataset.id];
       if (!a) return;
@@ -1616,6 +1860,12 @@
     'nm-desconto-tem': function (el) { V.novaMatricula.descontoTem = el.checked; render(); },
     'nm-desconto-valor': function (el) { V.novaMatricula.descontoValor = el.value; },
     'nm-desconto-obs': function (el) { V.novaMatricula.descontoObs = el.value; },
+    'nm-rg': function (el) { V.novaMatricula.rg = el.value; },
+    'nm-cpf': function (el) { V.novaMatricula.cpf = el.value; },
+    'nm-data-nascimento': function (el) { V.novaMatricula.dataNascimento = el.value; },
+    'nm-endereco': function (el) { V.novaMatricula.endereco = el.value; },
+    'nm-cep': function (el) { V.novaMatricula.cep = el.value; },
+    'nm-dia-vencimento': function (el) { V.novaMatricula.diaVencimento = el.value; },
     'add-matricula': function () {
       const nm = V.novaMatricula;
       const t = D.turmaPorId[nm.turmaId];
@@ -1627,6 +1877,7 @@
         if (!nome) { toast('Informe o nome do aluno ou escolha um já cadastrado.'); return; }
         aluno = {
           id: proxId('al', S.alunos), nome: nome, telefone: '', email: '', turmas: [], formaPagamento: nm.formaPagamento || 'asaas', bolsista: false, cancelado: false, responsavelFinanceiro: '', dataInicio: nm.dataInicio || '',
+          rg: nm.rg || '', cpf: nm.cpf || '', dataNascimento: nm.dataNascimento || '', endereco: nm.endereco || '', cep: nm.cep || '', diaVencimento: nm.diaVencimento || '',
           pagamento: { status: 'desconhecido', obs: '', atualizadoEm: '', valorEmAberto: '' }, frequencia: {},
           materialDidatico: { enviado: false, data: '', obs: '' }, rematricula: { enviada: false, data: '', obs: '' },
           livroDidatico: { qual: '', comprado: false, mensagemEnviada: false },
@@ -1656,6 +1907,7 @@
       V.novaMatricula = {
         alunoId: '', alunoNome: '', turmaId: '', dataInicio: '', dataPagamento: '', formaPagamento: 'asaas',
         valorMensalidade: '', valorMaterial: '', livro: '', descontoTem: false, descontoValor: '', descontoObs: '',
+        rg: '', cpf: '', dataNascimento: '', endereco: '', cep: '', diaVencimento: '',
       };
       toast('Matrícula registrada e aluno incluído na turma.');
       recalc(); render();

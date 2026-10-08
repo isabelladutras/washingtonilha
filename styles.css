@@ -132,6 +132,23 @@ textarea { resize: vertical; font-family: inherit; }
 .agenda-dia { max-width: 28rem; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
 .agenda-dia .grade-item { padding: 0.75rem 0.9rem; }
 
+/* Grade mensal (estilo calendário, uma linha colorida por professor em cada dia) */
+.mes-cabecalho { display: grid; grid-template-columns: repeat(7, 1fr); gap: 0.4rem; margin-bottom: 0.4rem; }
+.mes-cabecalho div { text-align: center; font-size: 0.78rem; font-weight: 700; color: var(--ink-2); }
+.mes-grade { display: grid; grid-template-columns: repeat(7, 1fr); grid-auto-rows: minmax(6rem, auto); gap: 0.4rem; }
+.mes-dia { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.4rem; cursor: pointer; display: flex; flex-direction: column; gap: 0.2rem; min-width: 0; transition: box-shadow 0.15s; }
+.mes-dia:hover { box-shadow: 0 0 0 2px var(--brand-soft); }
+.mes-dia.fora-do-mes { opacity: 0.4; }
+.mes-dia.hoje { box-shadow: inset 0 0 0 2px var(--brand); }
+.mes-dia-num { font-weight: 700; font-size: 0.85rem; }
+.mes-dia-itens { display: flex; flex-direction: column; gap: 0.15rem; min-width: 0; }
+.mes-item { font-size: 0.72rem; padding: 0.12rem 0.3rem; border-left: 3px solid var(--pc, var(--line)); background: #f7fafd; border-radius: 3px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mes-item.dim { opacity: 0.35; }
+.mes-item.mes-item-compromisso { border-left-color: var(--brand); background: var(--brand-soft); }
+.mes-mais { font-size: 0.7rem; color: var(--ink-3); padding: 0 0.3rem; }
+@media (max-width: 900px) { .mes-cabecalho, .mes-grade { grid-template-columns: repeat(7, 6.5rem); } .mes-cabecalho { overflow: hidden; } }
+@media (max-width: 900px) { .mes-grade { overflow-x: auto; } }
+
 /* Cards de turma */
 .lista-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(18rem, 1fr)); gap: 0.9rem; }
 .card-turma { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.9rem 1.05rem; display: flex; flex-direction: column; gap: 0.3rem; }

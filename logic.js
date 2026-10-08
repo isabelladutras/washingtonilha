@@ -222,6 +222,24 @@
       'Se já tiver pago, pode me mandar o comprovante por aqui que eu confirmo. Obrigada!';
   }
 
+  /** Dias até o próximo aniversário (dia/mês de dataNascimentoISO), a partir de hojeISO — sempre
+      >= 0, contando o próximo que ainda vai acontecer (já vira pro ano seguinte se o dia/mês já
+      passou este ano). Devolve null se a data de nascimento não for válida. */
+  function diasAteAniversario(dataNascimentoISO, hojeISO) {
+    const nasc = new Date((dataNascimentoISO || '') + 'T00:00:00');
+    if (isNaN(nasc.getTime())) return null;
+    const hoje = new Date((hojeISO || new Date().toISOString().slice(0, 10)) + 'T00:00:00');
+    let prox = new Date(hoje.getFullYear(), nasc.getMonth(), nasc.getDate());
+    if (prox.getTime() < hoje.getTime()) prox = new Date(hoje.getFullYear() + 1, nasc.getMonth(), nasc.getDate());
+    return Math.round((prox.getTime() - hoje.getTime()) / 86400000);
+  }
+
+  function mensagemAniversario(aluno) {
+    const primeiroNome = String(aluno.nome || '').split(' ')[0];
+    return 'Parabéns, ' + primeiroNome + '! 🎉🎂\n\n' +
+      'A equipe da Washington Ilha deseja um feliz aniversário pra você! Que seu novo ciclo venha cheio de conquistas. 😊';
+  }
+
   // ---------------- Calendário (.ics) — só "adicionar à agenda", sem sincronização de via dupla ----------------
 
   /** Próxima data (a partir de hoje) em que a turma tem aula, para um dos dias da semana dela. */
@@ -419,6 +437,7 @@
     telefoneParaWhatsApp: telefoneParaWhatsApp, linkWhatsApp: linkWhatsApp,
     mensagemRematricula: mensagemRematricula, mensagemMaterialDidatico: mensagemMaterialDidatico, mensagemCobranca: mensagemCobranca,
     mensagemConfirmacaoCompromisso: mensagemConfirmacaoCompromisso,
+    diasAteAniversario: diasAteAniversario, mensagemAniversario: mensagemAniversario,
     proximaData: proximaData, icsTurma: icsTurma, baixarIcsTurma: baixarIcsTurma,
     icsCompromisso: icsCompromisso, baixarIcsCompromisso: baixarIcsCompromisso,
     diaDaSemana: diaDaSemana, resumoFrequencia: resumoFrequencia,
