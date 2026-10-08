@@ -42,7 +42,9 @@ ul { margin: 0; padding-left: 1.2rem; }
 .muted { color: var(--ink-2); }
 
 /* Navegação */
-.rail { background: var(--rail); color: var(--rail-ink); padding: 1.4rem 1rem; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 1.4rem; }
+.rail { background: var(--rail); color: var(--rail-ink); padding: 1.4rem 1rem; position: sticky; top: 0; height: 100vh; display: flex; flex-direction: column; gap: 1.4rem; overflow-y: auto; }
+#nav { flex-shrink: 0; }
+.rodape { flex-shrink: 0; }
 .marca { display: flex; flex-direction: column; gap: 0.15rem; padding: 0 0.5rem; }
 .marca b { font: 800 1.3rem/1 var(--font-display); color: #fff; }
 .marca span { font-size: 0.8125rem; opacity: 0.8; }
@@ -57,6 +59,10 @@ main { padding: 1.6rem clamp(1rem, 3vw, 2.4rem) 3rem; min-width: 0; max-width: 8
 .topo { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.8rem 1.5rem; margin-bottom: 1.2rem; }
 .topo-acoes { display: flex; gap: 0.4rem; flex-wrap: wrap; }
 .subtitulo { margin: 1.4rem 0 0.7rem; }
+.stats-topo { display: flex; gap: 0.8rem; flex-wrap: wrap; margin-bottom: 1.1rem; }
+.stat-tile { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 0.7rem 1.1rem; display: flex; flex-direction: column; gap: 0.1rem; min-width: 8rem; }
+.stat-tile b { font: 800 1.5rem/1 var(--font-display); color: var(--rail); }
+.stat-tile span { font-size: 0.78rem; color: var(--ink-2); }
 
 /* Botões e campos */
 .btn { display: inline-flex; align-items: center; gap: 0.4rem; border: 1px solid var(--line); background: var(--card); padding: 0.45rem 0.85rem; border-radius: 8px; font-weight: 600; text-decoration: none; color: var(--ink); line-height: 1.2; }

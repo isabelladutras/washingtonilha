@@ -101,7 +101,7 @@
     return d.getHours() * 60 + d.getMinutes();
   })();
   const V = {
-    view: 'semana', semestre: L.semestreDeData(HOJE), fProf: '', fSit: '', buscaTurma: '', buscaAluno: '', fPag: '', syncStatus: 'sem-config',
+    view: 'semana', semestre: L.semestreDeData(HOJE), fProf: '', fSit: '', buscaTurma: '', buscaAluno: '', buscaAlunoCancelado: '', fPag: '', syncStatus: 'sem-config',
     semanaOffset: 0, semanaModo: 'semana', diaOffsetDias: 0,
     novaMatricula: {
       alunoId: '', alunoNome: '', turmaId: '', dataInicio: '', dataPagamento: '', formaPagamento: 'asaas',
@@ -181,13 +181,14 @@
     buscar: '<circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/>',
     dados: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
     email: '<rect x="2.5" y="4.5" width="19" height="15" rx="2.5"/><path d="m3.5 6 7.3 5.7a1.8 1.8 0 0 0 2.4 0L20.5 6"/>',
-    cadeado: '<rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5"/>'
+    cadeado: '<rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5"/>',
+    cancelados: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/><path d="m8.5 17.5 7 4M15.5 17.5l-7 4"/>'
   };
   const VIEWS = [
     { id: 'semana', nome: 'Semana' }, { id: 'pendencias', nome: 'Pendências' }, { id: 'turmas', nome: 'Turmas' }, { id: 'matriculas', nome: 'Matrículas' },
     { id: 'compromissos', nome: 'Compromissos' }, { id: 'frequencia', nome: 'Frequência' }, { id: 'inadimplencia', nome: 'Inadimplência' },
     { id: 'material', nome: 'Material' }, { id: 'entradas', nome: 'Entradas' }, { id: 'despesas', nome: 'Despesas' },
-    { id: 'alunos', nome: 'Alunos' }, { id: 'comunicados', nome: 'Comunicados' },
+    { id: 'alunos', nome: 'Alunos' }, { id: 'cancelados', nome: 'Cancelados' }, { id: 'comunicados', nome: 'Comunicados' },
     { id: 'professores', nome: 'Professores' }, { id: 'conferencia', nome: 'Conferência' },
     { id: 'buscar', nome: 'Buscar' }, { id: 'dados', nome: 'Dados' }
   ];
@@ -302,7 +303,7 @@
     app.innerHTML = ({
       semana: viewSemana, pendencias: viewPendencias, turmas: viewTurmas, matriculas: viewMatriculas, compromissos: viewCompromissos,
       frequencia: viewFrequencia, inadimplencia: viewInadimplencia, material: viewMaterial, entradas: viewEntradas, despesas: viewDespesas,
-      alunos: viewAlunos, comunicados: viewComunicados, professores: viewProfessores,
+      alunos: viewAlunos, cancelados: viewCancelados, comunicados: viewComunicados, professores: viewProfessores,
       conferencia: viewConferencia, buscar: viewBuscar, dados: viewDados
     }[V.view] || viewSemana)();
     if (!restaurarFoco(app, foco)) app.focus();
@@ -1130,22 +1131,31 @@
       }).join(' ') + '</div>' +
       '</div>';
   }
+  /* Linha de totais que aparece em cima das abas Alunos/Cancelados — visão rápida de tamanho da
+     base, sem precisar contar ou rolar a tabela. */
+  function linhaTotaisAlunos(nAlunosAtivos) {
+    return '<div class="stats-topo">' +
+      '<div class="stat-tile"><b>' + nAlunosAtivos + '</b><span>aluno(s) ativo(s)</span></div>' +
+      '<div class="stat-tile"><b>' + S.turmas.length + '</b><span>turma(s) no total</span></div>' +
+      '</div>';
+  }
   function viewAlunos() {
-    let lista = S.alunos.slice();
+    const ativos = S.alunos.filter(function (a) { return !a.cancelado; });
+    let lista = ativos.slice();
     if (V.buscaAluno) {
       const q = L.norm(V.buscaAluno);
       lista = lista.filter(function (a) { return L.norm(a.nome).indexOf(q) > -1; });
     }
     if (V.fPag === 'bolsista') lista = lista.filter(function (a) { return a.bolsista; });
-    else if (V.fPag === 'cancelado') lista = lista.filter(function (a) { return a.cancelado; });
     else if (V.fPag === 'cancelamento') lista = lista.filter(function (a) { return a.cancelamento && a.cancelamento.solicitado; });
     else if (V.fPag) lista = lista.filter(function (a) { return (a.pagamento.status || 'desconhecido') === V.fPag; });
     lista.sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
     const resumo = { 'em dia': 0, atrasado: 0, pendente: 0, desconhecido: 0 };
-    let nBolsistas = 0, nCancelamento = 0, nCancelados = 0;
-    S.alunos.forEach(function (a) { const s = a.pagamento.status || 'desconhecido'; resumo[s] = (resumo[s] || 0) + 1; if (a.bolsista) nBolsistas++; if (a.cancelamento && a.cancelamento.solicitado) nCancelamento++; if (a.cancelado) nCancelados++; });
+    let nBolsistas = 0, nCancelamento = 0;
+    ativos.forEach(function (a) { const s = a.pagamento.status || 'desconhecido'; resumo[s] = (resumo[s] || 0) + 1; if (a.bolsista) nBolsistas++; if (a.cancelamento && a.cancelamento.solicitado) nCancelamento++; });
     const grupoDuplicados = alunosDuplicadosProvaveis();
-    return '<div class="topo"><h1>Alunos (' + S.alunos.length + ')</h1></div>' +
+    return '<div class="topo"><h1>Alunos (' + ativos.length + ')</h1></div>' +
+      linhaTotaisAlunos(ativos.length) +
       (grupoDuplicados.length ? (
         '<h2 class="subtitulo">Possíveis duplicados (' + grupoDuplicados.length + ')</h2>' +
         '<p class="muted">Mesmo telefone ou nome parecido em mais de um cadastro — provavelmente a mesma pessoa cadastrada 2x. Escolha qual cadastro manter; os outros são mesclados nele (turmas, matrículas e histórico passam a contar para o que ficar) e removidos da lista.</p>' +
@@ -1156,7 +1166,6 @@
       '<select data-act="filtro-pag"><option value="">Todos os pagamentos</option>' +
       ['em dia', 'pendente', 'atrasado', 'desconhecido'].map(function (s) { return '<option value="' + s + '"' + (V.fPag === s ? ' selected' : '') + '>' + s + ' (' + (resumo[s] || 0) + ')</option>'; }).join('') +
       '<option value="bolsista"' + (V.fPag === 'bolsista' ? ' selected' : '') + '>bolsistas (' + nBolsistas + ')</option>' +
-      '<option value="cancelado"' + (V.fPag === 'cancelado' ? ' selected' : '') + '>cancelados (' + nCancelados + ')</option>' +
       '<option value="cancelamento"' + (V.fPag === 'cancelamento' ? ' selected' : '') + '>cancelamento solicitado (' + nCancelamento + ')</option>' +
       '</select></div>' +
       '<table class="tabela"><thead><tr><th>Aluno</th><th>Turmas</th><th>Pagamento</th><th>Frequência</th><th>Rematrícula</th><th>Material</th><th></th></tr></thead><tbody>' +
@@ -1175,6 +1184,35 @@
           '</td>' +
           '</tr>';
       }).join('') + '</tbody></table>';
+  }
+
+  /* ---------- Cancelados: aba própria pra quem já saiu, separada da lista principal de Alunos
+     (continuam no sistema — histórico de turma preservado — só não disputam espaço ali). ---------- */
+  function viewCancelados() {
+    let lista = S.alunos.filter(function (a) { return a.cancelado; });
+    if (V.buscaAlunoCancelado) {
+      const q = L.norm(V.buscaAlunoCancelado);
+      lista = lista.filter(function (a) { return L.norm(a.nome).indexOf(q) > -1; });
+    }
+    lista.sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
+    return '<div class="topo"><h1>Cancelados (' + lista.length + ')</h1></div>' +
+      '<p class="muted">Alunos marcados como cancelados — saem da lista principal de Alunos, mas continuam aqui e na(s) turma(s) deles (com a tag "Cancelado"), guardando o histórico.</p>' +
+      '<div class="filtros">' +
+      '<input type="search" placeholder="Buscar aluno cancelado por nome…" value="' + esc(V.buscaAlunoCancelado || '') + '" data-act="busca-aluno-cancelado">' +
+      '</div>' +
+      (lista.length ? ('<table class="tabela"><thead><tr><th>Aluno</th><th>Turmas</th><th>Motivo do cancelamento</th><th></th></tr></thead><tbody>' +
+        lista.map(function (a) {
+          const turmasTxt = a.turmas.map(function (x) { return x.turma + ' (' + x.semestre + ')'; }).join(', ');
+          return '<tr class="linha-cancelada">' +
+            '<td><b>' + esc(a.nome) + '</b>' + (a.telefone ? ('<div class="muted">' + esc(a.telefone) + '</div>') : '') + '</td>' +
+            '<td class="muted">' + esc(turmasTxt || '—') + '</td>' +
+            '<td class="muted">' + esc((a.cancelamento && a.cancelamento.motivo) || '—') + '</td>' +
+            '<td>' +
+            '<button class="btn sm" type="button" data-act="ver-aluno" data-id="' + a.id + '">Abrir</button> ' +
+            '<button class="btn sm" type="button" data-act="cancelado-toggle" data-id="' + a.id + '">Reativar</button>' +
+            '</td>' +
+            '</tr>';
+        }).join('') + '</tbody></table>') : '<p class="muted">Nenhum aluno cancelado.</p>');
   }
 
   function dlgAluno(id) {
@@ -1372,6 +1410,7 @@
     'filtro-sit': function (el) { V.fSit = el.value; render(); },
     'filtro-pag': function (el) { V.fPag = el.value; render(); },
     'busca-aluno': function (el) { V.buscaAluno = el.value; render(); },
+    'busca-aluno-cancelado': function (el) { V.buscaAlunoCancelado = el.value; render(); },
     'busca-geral': function (el) { V.buscaTurma = el.value; render(); },
     'tel-prof': function (el) { S.professores[Number(el.dataset.i)].telefone = el.value; LS.set('professores', S.professores); registrar('Editou telefone de professor', S.professores[Number(el.dataset.i)].nome); },
     'tel-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.telefone = el.value; LS.set('alunos', S.alunos); registrar('Editou telefone de aluno', a.nome); render(); } },
@@ -1429,7 +1468,10 @@
       LS.set('alunos', S.alunos);
       registrar('Atualizou cancelamento efetivo', a.nome + ' → ' + (a.cancelado ? 'cancelado' : 'reativado'));
       render();
-      dlgAluno(a.id);
+      // Só reabre o cadastro se ele já estava aberto (ex.: clicou o checkbox de dentro da ficha).
+      // Clicando "Reativar" direto na lista da aba Cancelados, não precisa abrir o cadastro.
+      const dlg = $('#dlg');
+      if (dlg && dlg.open) dlgAluno(a.id);
     },
     'excluir-aluno': function (el) {
       const a = D.alunoPorId[el.dataset.id];
