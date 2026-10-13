@@ -172,7 +172,7 @@
       rg: '', cpf: '', dataNascimento: '', endereco: '', cep: '', diaVencimento: '',
     },
     novoCompromisso: { titulo: '', alunoId: '', alunoNome: '', comQuem: 'Isa', data: '', horario: '', local: '', obs: '' },
-    chamadaTurmaId: '', chamadaData: HOJE, chamadaPresencas: {},
+    chamadaTurmaId: '', chamadaData: HOJE, chamadaPresencas: {}, fMesFrequencia: mesDeData(HOJE),
     novoMaterial: { alunoId: '', alunoNome: '', turmaNome: '', semestre: L.semestreDeData(HOJE), pagoWashington: false, recebidoEm: '', dataEnvio: '', dataEntrega: '', entregue: false, obs: '' },
     novaEntrada: { data: HOJE, alunoId: '', alunoNome: '', valor: '', formaPagamento: 'Pix', referente: '', obs: '' },
     novaDespesa: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false },
@@ -929,6 +929,29 @@
       Object.keys(existente.presencas || {}).forEach(function (id) { V.chamadaPresencas[id] = existente.presencas[id]; });
     }
   }
+  /* Relatório de frequência de um mês (AAAA-MM): uma linha por aluno+turma, somando presenças e
+     faltas das chamadas registradas naquele mês — pra baixar em CSV sem precisar abrir aluno por
+     aluno. */
+  function relatorioFrequenciaMes(ym) {
+    const chamadasMes = S.frequencias.filter(function (c) { return mesDeData(c.data) === ym; });
+    const porAlunoTurma = {};
+    chamadasMes.forEach(function (c) {
+      Object.keys(c.presencas || {}).forEach(function (alunoId) {
+        const chave = alunoId + '|' + c.turmaId;
+        if (!porAlunoTurma[chave]) porAlunoTurma[chave] = { alunoId: alunoId, turmaId: c.turmaId, presencas: 0, faltas: 0 };
+        if (c.presencas[alunoId]) porAlunoTurma[chave].presencas++; else porAlunoTurma[chave].faltas++;
+      });
+    });
+    return Object.keys(porAlunoTurma).map(function (k) { return porAlunoTurma[k]; }).map(function (x) {
+      const aluno = D.alunoPorId[x.alunoId];
+      const turma = D.turmaPorId[x.turmaId];
+      const total = x.presencas + x.faltas;
+      return {
+        nome: aluno ? aluno.nome : '(aluno excluído)', turma: turma ? turma.turma : '(turma excluída)',
+        presencas: x.presencas, faltas: x.faltas, total: total, pct: total ? Math.round((x.presencas / total) * 100) : 0,
+      };
+    }).sort(function (a, b) { return L.norm(a.turma).localeCompare(L.norm(b.turma)) || L.norm(a.nome).localeCompare(L.norm(b.nome)); });
+  }
   function viewFrequencia() {
     const turmasDoSemestre = S.turmas.filter(function (t) { return t.semestre === V.semestre; });
     const semBtns = D.semestres.map(function (s) { return '<button class="btn sm' + (V.semestre === s ? ' on' : '') + '" type="button" data-act="semestre" data-s="' + s + '">' + esc(s) + '</button>'; }).join('');
@@ -969,6 +992,8 @@
       const r = L.resumoFrequencia(chamadasSemestre, id);
       return r.faltas > 0 ? { aluno: a, resumo: r } : null;
     }).filter(Boolean).sort(function (x, y) { return y.resumo.faltas - x.resumo.faltas; });
+    const mesesFreq = Array.from(new Set(S.frequencias.map(function (c) { return mesDeData(c.data); }).filter(Boolean).concat([mesDeData(HOJE)]))).sort().reverse();
+    const relatorioMes = relatorioFrequenciaMes(V.fMesFrequencia);
     return '<div class="topo"><h1>Frequência</h1><div class="topo-acoes">' + semBtns + '</div></div>' +
       '<section class="bloco">' +
       '<h2>Fazer chamada</h2>' +
@@ -991,7 +1016,18 @@
       (alertas.length ? ('<h2 class="subtitulo">Faltas recorrentes (presença abaixo de 75%)</h2><ul class="lista-log">' +
         alertas.map(function (x) { return '<li><b>' + esc(x.aluno.nome) + '</b> · ' + x.resumo.pct + '% de presença (' + x.resumo.presencas + '/' + x.resumo.total + ')</li>'; }).join('') + '</ul>') : '') +
       (faltasPorAluno.length ? ('<h2 class="subtitulo">Faltas acumuladas no semestre ' + esc(V.semestre) + ' (' + faltasPorAluno.length + ')</h2><ul class="lista-log">' +
-        faltasPorAluno.map(function (x) { return '<li><b>' + esc(x.aluno.nome) + '</b> · ' + x.resumo.faltas + ' falta(s) de ' + x.resumo.total + ' aula(s) registrada(s) (' + x.resumo.pct + '% presença)</li>'; }).join('') + '</ul>') : '');
+        faltasPorAluno.map(function (x) { return '<li><b>' + esc(x.aluno.nome) + '</b> · ' + x.resumo.faltas + ' falta(s) de ' + x.resumo.total + ' aula(s) registrada(s) (' + x.resumo.pct + '% presença)</li>'; }).join('') + '</ul>') : '') +
+      '<section class="bloco">' +
+      '<h2>Relatório de frequência do mês</h2>' +
+      '<div class="filtros">' +
+      '<select data-act="fr-mes-relatorio">' + mesesFreq.map(function (m) { return '<option value="' + m + '"' + (V.fMesFrequencia === m ? ' selected' : '') + '>' + esc(nomeMes(m)) + '</option>'; }).join('') + '</select>' +
+      '<button class="btn sm" type="button" data-act="exportar-frequencia-csv">Baixar CSV</button>' +
+      '<span class="muted">' + relatorioMes.length + ' registro(s) (aluno + turma)</span>' +
+      '</div>' +
+      (relatorioMes.length ? ('<table class="tabela"><thead><tr><th>Aluno</th><th>Turma</th><th>Presenças</th><th>Faltas</th><th>Total de aulas</th><th>% presença</th></tr></thead><tbody>' +
+        relatorioMes.map(function (x) { return '<tr><td>' + esc(x.nome) + '</td><td>' + esc(x.turma) + '</td><td>' + x.presencas + '</td><td>' + x.faltas + '</td><td>' + x.total + '</td><td>' + x.pct + '%</td></tr>'; }).join('') +
+        '</tbody></table>') : '<p class="muted">Nenhuma chamada registrada em ' + esc(nomeMes(V.fMesFrequencia)) + '.</p>') +
+      '</section>';
   }
 
   /* ---------- Inadimplência (régua de cobrança) ---------- */
@@ -1390,6 +1426,7 @@
         const ocorrencias = ocorrenciasDoProfessor(p.nome);
         const horas = horasDoProfessor(p.nome);
         const totalMes = totalHorasNoMes(p.nome, mesAtual);
+        const lancamentoMesAtual = horas.find(function (h) { return mesDeData(h.semana) === mesAtual; });
         return '<div class="card-turma">' +
           '<div class="ct-topo"><b>' + esc(p.nome) + '</b></div>' +
           '<div class="ct-linha">' + turmasDele.length + ' turma(s) no total</div>' +
@@ -1400,18 +1437,19 @@
           (ocorrencias.length ? ('<div class="ct-linha muted">' + ocorrencias.length + ' ocorrência(s) recente(s) · <button class="link" type="button" data-act="ir-view" data-view="ocorrencias">ver em Ocorrências</button></div>') : '') +
           '<button class="btn sm" type="button" data-act="excluir-professor" data-i="' + i + '">Excluir professor</button>' +
           '</div>' +
-          '<h4>Horas-aula por semana</h4>' +
-          '<p class="muted">Total lançado em ' + esc(nomeMes(mesAtual)) + ': <b>' + totalMes.toLocaleString('pt-BR') + 'h</b>' +
+          '<h4>Horas-aula no mês</h4>' +
+          '<p class="muted">É o total de horas que ' + esc(p.nome.split(' ')[0]) + ' deu de aula naquele mês — some tudo (semanas, reposições etc.) e lance um número só por mês. Serve pra calcular quanto pagar: horas × valor da hora-aula.</p>' +
+          '<p class="muted">Total em ' + esc(nomeMes(mesAtual)) + ': <b>' + totalMes.toLocaleString('pt-BR') + 'h</b>' +
           (p.valorHoraAula ? (' · a pagar: <b>' + esc(fmtReais(totalMes * Number(normalizarValorMoeda(p.valorHoraAula)))) + '</b>') : '') + '</p>' +
           '<div class="campos-matricula">' +
-          '<input type="date" id="ha-semana-' + i + '" value="' + L.segundaDaSemana(HOJE) + '">' +
-          '<input type="text" inputmode="decimal" id="ha-horas-' + i + '" placeholder="Ex.: 12,5">' +
+          '<div class="campo"><label>Mês</label><input type="month" id="ha-mes-' + i + '" value="' + mesAtual + '"></div>' +
+          '<div class="campo"><label>Total de horas no mês</label><input type="text" inputmode="decimal" id="ha-horas-' + i + '" placeholder="Ex.: 42" value="' + esc(lancamentoMesAtual ? lancamentoMesAtual.horas : '') + '"></div>' +
           '</div>' +
-          '<button class="btn sm" type="button" data-act="add-horas-aula" data-prof="' + esc(p.nome) + '" data-i="' + i + '">Lançar semana</button>' +
+          '<button class="btn sm" type="button" data-act="add-horas-aula" data-prof="' + esc(p.nome) + '" data-i="' + i + '">Salvar total do mês</button>' +
           (horas.length ? ('<ul class="lista-alunos">' + horas.map(function (h) {
-            return '<li class="aluno-turma-linha"><div>Semana de <b>' + esc(L.fmtCurta(h.semana)) + '</b> · ' + (h.horas ? (esc(h.horas) + 'h') : '—') + '</div>' +
+            return '<li class="aluno-turma-linha"><div>' + esc(nomeMes(mesDeData(h.semana))) + ' · ' + (h.horas ? ('<b>' + esc(h.horas) + 'h</b>') : '—') + '</div>' +
               '<div class="aluno-turma-acoes"><button class="btn sm" type="button" data-act="excluir-horas-aula" data-id="' + h.id + '">Excluir</button></div></li>';
-          }).join('') + '</ul>') : '<p class="muted">Nenhuma semana lançada ainda.</p>') +
+          }).join('') + '</ul>') : '<p class="muted">Nenhum mês lançado ainda.</p>') +
           '</div>';
       }).join('') + '</div>';
   }
@@ -2067,19 +2105,22 @@
       LS.set('ocorrenciasProfessor', S.ocorrenciasProfessor);
       render();
     },
+    /* Horas-aula: um lançamento só por mês por professor (o total de horas que ele(a) deu de
+       aula naquele mês) — guardado no mesmo campo "semana" de sempre (pelo 1º dia do mês), só pra
+       não precisar migrar os dados antigos; lançar de novo no mesmo mês substitui o valor, nunca
+       duplica. */
     'add-horas-aula': function (el) {
       const i = el.dataset.i;
-      const semanaBruta = $('#ha-semana-' + i).value;
+      const mesBruto = $('#ha-mes-' + i).value;
       const horas = normalizarValorMoeda($('#ha-horas-' + i).value);
-      if (!semanaBruta) { toast('Escolha uma data da semana.'); return; }
-      if (!horas) { toast('Informe as horas.'); return; }
-      const semana = L.segundaDaSemana(semanaBruta);
-      const existente = S.horasAula.find(function (h) { return L.norm(h.professor) === L.norm(el.dataset.prof) && h.semana === semana; });
-      if (existente) { existente.horas = horas; }
-      else { S.horasAula.push({ id: proxId('ha', S.horasAula), professor: el.dataset.prof, semana: semana, horas: horas }); }
+      if (!mesBruto) { toast('Escolha o mês.'); return; }
+      if (!horas) { toast('Informe o total de horas do mês.'); return; }
+      const semana = mesBruto + '-01';
+      S.horasAula = S.horasAula.filter(function (h) { return !(L.norm(h.professor) === L.norm(el.dataset.prof) && mesDeData(h.semana) === mesBruto); });
+      S.horasAula.push({ id: proxId('ha', S.horasAula), professor: el.dataset.prof, semana: semana, horas: horas });
       LS.set('horasAula', S.horasAula);
-      registrar('Lançou horas-aula', el.dataset.prof + ' · semana de ' + L.fmtCurta(semana) + ' · ' + horas + 'h');
-      toast('Semana lançada.');
+      registrar('Lançou horas-aula do mês', el.dataset.prof + ' · ' + nomeMes(mesBruto) + ' · ' + horas + 'h');
+      toast('Total do mês salvo.');
       render();
     },
     'excluir-horas-aula': function (el) {
@@ -2538,6 +2579,11 @@
     /* ---- Frequência ---- */
     'fr-turma': function (el) { V.chamadaTurmaId = el.value; carregarChamadaForm(); render(); },
     'fr-data': function (el) { V.chamadaData = el.value; carregarChamadaForm(); render(); },
+    'fr-mes-relatorio': function (el) { V.fMesFrequencia = el.value; render(); },
+    'exportar-frequencia-csv': function () {
+      const linhas = relatorioFrequenciaMes(V.fMesFrequencia).map(function (x) { return [x.nome, x.turma, x.presencas, x.faltas, x.total, x.pct + '%']; });
+      baixarCSV('frequencia-' + V.fMesFrequencia + '.csv', ['Aluno', 'Turma', 'Presenças', 'Faltas', 'Total de aulas', '% presença'], linhas);
+    },
     'fr-marcar': function (el) { V.chamadaPresencas[el.dataset.id] = el.dataset.v === 'presente'; render(); },
     'editar-chamada': function (el) { V.chamadaTurmaId = el.dataset.turma; V.chamadaData = el.dataset.data; carregarChamadaForm(); render(); },
     'salvar-chamada': function () {
