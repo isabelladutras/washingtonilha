@@ -9,7 +9,7 @@
 
   /* ---------- Armazenamento local (por navegador) + sincronização opcional entre navegadores ---------- */
   const Sync = window.Sync || { configured: function () { return false; }, init: function () {}, push: function () { return Promise.resolve(false); } };
-  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados', 'duplicadosIgnorados'];
+  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados', 'duplicadosIgnorados', 'ocorrenciasProfessor', 'horasAula'];
   const LS = {
     get: function (k, def) { try { const v = localStorage.getItem('washington.' + k); return v == null ? def : JSON.parse(v); } catch (e) { return def; } },
     set: function (k, v) {
@@ -26,7 +26,7 @@
     professores: LS.get('professores', null) || (DATA.professores || []).map(function (p) { return Object.assign({}, p); }),
     turmas: LS.get('turmas', null) || (DATA.turmas || []).map(function (t) { return Object.assign({}, t); }),
     alunos: alunosSalvos || (DATA.alunos || []).map(function (a) {
-      return Object.assign({ formaPagamento: 'desconhecido', email: '', bolsista: false, cancelado: false, dataInicio: '', responsavelFinanceiro: '', rg: '', cpf: '', dataNascimento: '', endereco: '', cep: '', diaVencimento: '' }, a, {
+      return Object.assign({ formaPagamento: 'desconhecido', email: '', bolsista: false, cancelado: false, dataInicio: '', responsavelFinanceiro: '', rg: '', cpf: '', dataNascimento: '', endereco: '', cep: '', diaVencimento: '', observacoes: '', aniversarioUltimoAno: null }, a, {
         pagamento: Object.assign({ valorEmAberto: '' }, a.pagamento), frequencia: Object.assign({}, a.frequencia),
         materialDidatico: Object.assign({}, a.materialDidatico), rematricula: Object.assign({}, a.rematricula),
         livroDidatico: Object.assign({ qual: '', comprado: false, mensagemEnviada: false }, a.livroDidatico),
@@ -46,6 +46,8 @@
     pendencias: LS.get('pendencias', []),
     comunicados: LS.get('comunicados', []),
     duplicadosIgnorados: LS.get('duplicadosIgnorados', []),
+    ocorrenciasProfessor: LS.get('ocorrenciasProfessor', []),
+    horasAula: LS.get('horasAula', []),
   };
 
   /* ---------- Garante que alunos já salvos (ou sincronizados de outro navegador) antes destes
@@ -74,6 +76,8 @@
       if (a.endereco == null) a.endereco = '';
       if (a.cep == null) a.cep = '';
       if (a.diaVencimento == null) a.diaVencimento = '';
+      if (a.observacoes == null) a.observacoes = '';
+      if (a.aniversarioUltimoAno == null) a.aniversarioUltimoAno = null;
     });
     return lista;
   }
@@ -113,6 +117,7 @@
     if (normalizarValoresMoedaEm(S.entradas, ['valor'])) LS.set('entradas', S.entradas);
     if (normalizarValoresMoedaEm(S.matriculas, ['valorMensalidade', 'valorMaterial', 'desconto.valor'])) LS.set('matriculas', S.matriculas);
     if (normalizarValoresMoedaEm(S.alunos, ['pagamento.valorEmAberto'])) LS.set('alunos', S.alunos);
+    if (normalizarValoresMoedaEm(S.horasAula, ['horas'])) LS.set('horasAula', S.horasAula);
   }
   normalizarValoresMoeda();
 
@@ -160,7 +165,8 @@
     novaDespesa: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '' },
     fMesEntradas: '', fMesDespesas: '',
     novaPendencia: { texto: '', alunoId: '', turmaId: '', prazo: '' }, fPendencia: 'abertas',
-    novoComunicado: { mensagem: '', turmaId: '' },
+    novoComunicado: { mensagem: '', turmaIds: [] },
+    novoProfessor: { nome: '', telefone: '' },
     semProfsOcultos: {},
     logado: !Sync.configured(), authEmail: '', loginEmail: '', loginSenha: '', loginErro: '', loginCarregando: false,
   };
@@ -574,12 +580,16 @@
   function viewTurmas() {
     let lista = S.turmas.filter(function (t) { return t.semestre === V.semestre; });
     if (V.fSit) lista = lista.filter(function (t) { return t.situacao === V.fSit; });
-    const situacoes = Array.from(new Set(S.turmas.filter(function (t) { return t.semestre === V.semestre; }).map(function (t) { return t.situacao; }))).filter(Boolean).sort();
+    if (V.fProf) lista = lista.filter(function (t) { return L.norm(t.professor) === L.norm(V.fProf); });
+    const doSemestre = S.turmas.filter(function (t) { return t.semestre === V.semestre; });
+    const situacoes = Array.from(new Set(doSemestre.map(function (t) { return t.situacao; }))).filter(Boolean).sort();
+    const professores = Array.from(new Set(doSemestre.map(function (t) { return t.professor; }))).filter(Boolean).sort(function (a, b) { return L.norm(a).localeCompare(L.norm(b)); });
     const semBtns = D.semestres.map(function (s) { return '<button class="btn sm' + (V.semestre === s ? ' on' : '') + '" type="button" data-act="semestre" data-s="' + s + '">' + esc(s) + '</button>'; }).join('');
     const encerram = lista.filter(function (t) { return t.encerraProxSemestre; });
     return '<div class="topo"><h1>Turmas</h1><div class="topo-acoes">' + semBtns + '<button class="btn sm on" type="button" data-act="nova-turma">+ Nova turma</button></div></div>' +
       '<div class="filtros">' +
       '<select data-act="filtro-sit"><option value="">Todas as situações</option>' + situacoes.map(function (s) { return '<option value="' + esc(s) + '"' + (V.fSit === s ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select>' +
+      '<select data-act="filtro-prof-turma"><option value="">Todos os professores</option>' + professores.map(function (p) { return '<option value="' + esc(p) + '"' + (V.fProf === p ? ' selected' : '') + '>' + esc(p) + '</option>'; }).join('') + '</select>' +
       '<span class="muted">' + lista.length + ' turma(s)' + (encerram.length ? (' · ' + encerram.length + ' encerram no próximo semestre') : '') + '</span>' +
       '</div>' +
       '<div class="lista-cards">' + lista.map(function (t) { return cardTurma(t); }).join('') + '</div>';
@@ -675,7 +685,8 @@
       '<div class="check"><label><input type="checkbox" data-act="chk-matricula" data-id="' + m.id + '" data-campo="materialCobrado"' + (m.checklist.materialCobrado ? ' checked' : '') + '> Cobrado para comprar o material/livro</label></div>' +
       '<div class="campo"><label>Livro didático</label><input type="text" data-act="livro-matricula" data-id="' + m.id + '" value="' + esc(m.livro || '') + '" placeholder="Qual livro o aluno precisa comprar"></div>' +
       '<div class="ct-acoes">' +
-      (D.alunoPorId[m.alunoId] && D.alunoPorId[m.alunoId].telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(D.alunoPorId[m.alunoId].telefone, L.mensagemMaterialDidatico(D.alunoPorId[m.alunoId], t, m.livro)) + '">Avisar sobre o livro</a>') : '<span class="muted">Cadastre o telefone do aluno para avisar sobre o livro</span>') +
+      (D.alunoPorId[m.alunoId] && D.alunoPorId[m.alunoId].telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(D.alunoPorId[m.alunoId].telefone, L.mensagemMaterialDidatico(D.alunoPorId[m.alunoId], t, m.livro)) + '">Avisar sobre o livro</a>' +
+        '<button class="btn sm' + (D.alunoPorId[m.alunoId].materialDidatico.enviado ? ' on-ok' : '') + '" type="button" data-act="marcar-material" data-id="' + m.alunoId + '">' + (D.alunoPorId[m.alunoId].materialDidatico.enviado ? '✓ Avisado' : '✓ Marcar como avisado') + '</button>') : '<span class="muted">Cadastre o telefone do aluno para avisar sobre o livro</span>') +
       '<button class="btn sm" type="button" data-act="editar-matricula" data-id="' + m.id + '">Editar matrícula</button>' +
       '<button class="btn sm" type="button" data-act="excluir-matricula" data-id="' + m.id + '">Excluir matrícula</button>' +
       '</div></div>';
@@ -763,6 +774,22 @@
     if (c.data === HOJE) return '<span class="tag tag-aviso">Hoje</span>';
     return '<span class="tag tag-neutro">Agendado</span>';
   }
+  function dlgEditarCompromisso(id) {
+    const c = S.compromissos.find(function (x) { return x.id === id; });
+    if (!c) return;
+    abrirDlg('<article class="dlg-card"><header><h2>Editar compromisso</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header>' +
+      '<div class="dlg-corpo">' +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Título</label><input type="text" id="ec-titulo" value="' + esc(c.titulo || '') + '"></div>' +
+      '<div class="campo"><label>Com quem</label><input type="text" list="lista-quem" id="ec-comquem" value="' + esc(c.comQuem || '') + '"></div>' +
+      '<div class="campo"><label>Data</label><input type="date" id="ec-data" value="' + esc(c.data || '') + '"></div>' +
+      '<div class="campo"><label>Horário</label><input type="text" id="ec-horario" value="' + esc(c.horario || '') + '" placeholder="Ex.: 14h30"></div>' +
+      '<div class="campo"><label>Local</label><input type="text" id="ec-local" value="' + esc(c.local || '') + '"></div>' +
+      '</div>' +
+      '<div class="campo"><label>Observação</label><input type="text" id="ec-obs" value="' + esc(c.obs || '') + '" placeholder="Pauta, contexto…"></div>' +
+      '<div class="ct-acoes"><button class="btn sm on" type="button" data-act="salvar-compromisso" data-id="' + c.id + '">Salvar</button></div>' +
+      '</div></article>');
+  }
   function cardCompromisso(c) {
     const aluno = c.alunoId ? D.alunoPorId[c.alunoId] : null;
     const nomeResp = aluno ? aluno.nome : c.alunoNome;
@@ -772,6 +799,7 @@
       '<div class="ct-linha">Com: ' + esc(c.comQuem || '—') + (nomeResp ? (' · ' + esc(nomeResp)) : '') + (c.local ? (' · ' + esc(c.local)) : '') + '</div>' +
       (c.obs ? ('<div class="ct-linha muted">' + esc(c.obs) + '</div>') : '') +
       '<div class="ct-acoes">' +
+      '<button class="btn sm" type="button" data-act="editar-compromisso" data-id="' + c.id + '">Editar</button>' +
       (c.status === 'agendado' ? ('<button class="btn sm" type="button" data-act="compromisso-status" data-id="' + c.id + '" data-st="realizado">Marcar realizado</button>' +
         '<button class="btn sm" type="button" data-act="compromisso-status" data-id="' + c.id + '" data-st="cancelado">Cancelar</button>') :
         '<button class="btn sm" type="button" data-act="compromisso-status" data-id="' + c.id + '" data-st="agendado">Reabrir</button>') +
@@ -893,7 +921,9 @@
       (cob.etapa ? ('<div class="ct-linha">Última cobrança enviada: <b>' + esc(etapasTxt[cob.etapa - 1] || ('etapa ' + cob.etapa)) + '</b>' + (cob.enviadoEm ? (' · ' + relTempo(cob.enviadoEm)) : '') + '</div>') : '<div class="ct-linha muted">Nenhuma cobrança enviada ainda</div>') +
       '<div class="ct-acoes">' +
       (temTel ? [1, 2, 3].map(function (et) {
-        return '<a class="btn sm" target="_blank" rel="noopener" data-act="cobranca-etapa" data-id="' + a.id + '" data-et="' + et + '" href="' + L.linkWhatsApp(a.telefone, L.mensagemCobranca(a, et)) + '">' + etapasTxt[et - 1] + '</a>';
+        const marcada = cob.etapa === et;
+        return '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemCobranca(a, et)) + '">' + etapasTxt[et - 1] + '</a>' +
+          '<button class="btn sm' + (marcada ? ' on-ok' : '') + '" type="button" data-act="cobranca-etapa" data-id="' + a.id + '" data-et="' + et + '">' + (marcada ? '✓ Marcada' : '✓ Marcar como enviada') + '</button>';
       }).join('') : '<span class="muted">Cadastre o telefone do aluno para cobrar por WhatsApp</span>') +
       '</div></div>';
   }
@@ -1101,38 +1131,51 @@
   }
 
   /* ---------- Comunicados (mensagens em massa para alunos) ---------- */
+  /* Comunicados antigos (sincronizados de antes desta mudança) tinham c.turmaId (uma turma só, ou
+     '' para todos). Agora dá pra escolher mais de uma turma de uma vez: c.turmaIds (lista; vazia =
+     todos os alunos com WhatsApp). Esta função deixa os dois formatos funcionando. */
+  function turmaIdsDoComunicado(c) {
+    if (Array.isArray(c.turmaIds)) return c.turmaIds;
+    return c.turmaId ? [c.turmaId] : [];
+  }
   function alunosDoComunicado(c) {
-    if (!c.turmaId) return S.alunos.filter(function (a) { return a.telefone; });
-    const t = D.turmaPorId[c.turmaId];
-    if (!t) return [];
-    const nomes = (t.alunosNomes || []).map(function (n) { return L.norm(n.replace(/\s*[\(\*].*$/, '').replace(/\*$/, '')); });
-    return S.alunos.filter(function (a) { return a.telefone && nomes.indexOf(L.norm(a.nome)) > -1; });
+    const ids = turmaIdsDoComunicado(c);
+    if (!ids.length) return S.alunos.filter(function (a) { return a.telefone; });
+    const turmas = ids.map(function (id) { return D.turmaPorId[id]; }).filter(Boolean);
+    const nomes = {};
+    turmas.forEach(function (t) { (t.alunosNomes || []).forEach(function (n) { nomes[L.norm(n.replace(/\s*[\(\*].*$/, '').replace(/\*$/, ''))] = true; }); });
+    return S.alunos.filter(function (a) { return a.telefone && nomes[L.norm(a.nome)]; });
   }
   function linhaComunicado(c) {
-    const t = c.turmaId ? D.turmaPorId[c.turmaId] : null;
+    const turmas = turmaIdsDoComunicado(c).map(function (id) { return D.turmaPorId[id]; }).filter(Boolean);
     const alunosAlvo = alunosDoComunicado(c);
     const enviados = c.enviados || {};
     const nEnviados = alunosAlvo.filter(function (a) { return enviados[a.id]; }).length;
-    return '<div class="bloco"><div class="ct-topo"><b>' + esc(L.fmtCurta(c.data)) + ' · ' + (t ? esc(t.turma) : 'Todos os alunos com WhatsApp') + '</b>' +
+    return '<div class="bloco"><div class="ct-topo"><b>' + esc(L.fmtCurta(c.data)) + ' · ' + (turmas.length ? esc(turmas.map(function (t) { return t.turma; }).join(', ')) : 'Todos os alunos com WhatsApp') + '</b>' +
       '<span class="tag tag-neutro">' + nEnviados + ' / ' + alunosAlvo.length + ' enviado(s)</span>' +
       '<button class="btn sm" type="button" data-act="excluir-comunicado" data-id="' + c.id + '">Excluir</button></div>' +
       '<p>' + esc(c.mensagem) + '</p>' +
       (alunosAlvo.length ? ('<ul class="lista-alunos">' + alunosAlvo.map(function (a) {
-        return '<li class="aluno-turma-linha"><div>' + esc(a.nome) + (enviados[a.id] ? ' <span class="tag tag-ok">Enviado</span>' : '') + '</div>' +
+        const jaEnviado = !!enviados[a.id];
+        return '<li class="aluno-turma-linha"><div>' + esc(a.nome) + (jaEnviado ? ' <span class="tag tag-ok">Enviado</span>' : '') + '</div>' +
           '<div class="aluno-turma-acoes">' +
-          '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, c.mensagem) + '" data-act="comunicado-marcar-enviado" data-com="' + c.id + '" data-aluno="' + a.id + '">Abrir no WhatsApp</a>' +
+          '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, c.mensagem) + '">Abrir no WhatsApp</a>' +
+          '<button class="btn sm' + (jaEnviado ? ' on-ok' : '') + '" type="button" data-act="comunicado-marcar-enviado" data-com="' + c.id + '" data-aluno="' + a.id + '">' + (jaEnviado ? '✓ Enviado' : '✓ Marcar como enviado') + '</button>' +
           '</div></li>';
-      }).join('') + '</ul>') : '<p class="muted">Nenhum aluno com telefone cadastrado nessa turma.</p>');
+      }).join('') + '</ul>') : '<p class="muted">Nenhum aluno com telefone cadastrado nessa(s) turma(s).</p>');
   }
   function viewComunicados() {
     const nc = V.novoComunicado;
+    const turmaIds = nc.turmaIds || [];
     const lista = S.comunicados.slice().sort(function (a, b) { return (b.data || '').localeCompare(a.data || '') || (b.id || '').localeCompare(a.id || ''); });
     return '<div class="topo"><h1>Comunicados</h1></div>' +
-      '<p class="muted">Escreva um aviso e dispare para todos os alunos de uma turma (ou de todas as turmas) por WhatsApp, acompanhando quem já recebeu.</p>' +
+      '<p class="muted">Escreva um aviso e dispare para todos os alunos de uma ou mais turmas (ou de todas) por WhatsApp, acompanhando quem já recebeu.</p>' +
       '<section class="bloco">' +
       '<h2>Novo comunicado</h2>' +
-      '<div class="campo"><label>Turma</label><select data-act="com-turma"><option value="">Todos os alunos com WhatsApp cadastrado</option>' +
-      S.turmas.slice().sort(function (a, b) { return L.norm(a.turma).localeCompare(L.norm(b.turma)); }).map(function (t) { return '<option value="' + t.id + '"' + (nc.turmaId === t.id ? ' selected' : '') + '>' + esc(t.turma) + ' · ' + esc(t.semestre) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="campo"><label>Turmas (deixe tudo desmarcado para todos os alunos com WhatsApp cadastrado)</label>' +
+      '<div class="lista-checkboxes-turmas">' + S.turmas.slice().sort(function (a, b) { return L.norm(a.turma).localeCompare(L.norm(b.turma)); }).map(function (t) {
+        return '<label class="check"><input type="checkbox" data-act="com-turma-toggle" data-id="' + t.id + '"' + (turmaIds.indexOf(t.id) > -1 ? ' checked' : '') + '> ' + esc(t.turma) + ' · ' + esc(t.semestre) + '</label>';
+      }).join('') + '</div></div>' +
       '<div class="campo"><label>Mensagem</label><textarea data-act="com-mensagem" rows="3" placeholder="Escreva o comunicado…">' + esc(nc.mensagem) + '</textarea></div>' +
       '<button class="btn on" type="button" data-act="gerar-comunicado">Gerar lista de envio</button>' +
       '</section>' +
@@ -1140,15 +1183,67 @@
   }
 
   /* ---------- Professores ---------- */
+  const TIPOS_OCORRENCIA_PROFESSOR = { falta: 'Falta', reposicao: 'Reposição', substituicao: 'Substituição' };
+  function tipoOcorrenciaLabel(t) { return TIPOS_OCORRENCIA_PROFESSOR[t] || t; }
+  function ocorrenciasDoProfessor(nome) {
+    return S.ocorrenciasProfessor.filter(function (o) { return L.norm(o.professor) === L.norm(nome); })
+      .sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
+  }
+  function horasDoProfessor(nome) {
+    return S.horasAula.filter(function (h) { return L.norm(h.professor) === L.norm(nome); })
+      .sort(function (a, b) { return (b.semana || '').localeCompare(a.semana || ''); });
+  }
+  function totalHorasNoMes(nome, ym) {
+    return horasDoProfessor(nome).filter(function (h) { return mesDeData(h.semana) === ym; })
+      .reduce(function (s, h) { const v = Number(normalizarValorMoeda(h.horas)); return s + (isNaN(v) ? 0 : v); }, 0);
+  }
   function viewProfessores() {
+    const np = V.novoProfessor;
+    const mesAtual = mesDeData(HOJE);
     return '<div class="topo"><h1>Professores</h1></div>' +
+      '<section class="bloco">' +
+      '<h2>Novo professor</h2>' +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Nome</label><input type="text" data-act="np-nome" value="' + esc(np.nome) + '" placeholder="Nome completo"></div>' +
+      '<div class="campo"><label>Telefone (WhatsApp)</label><input type="text" data-act="np-telefone" value="' + esc(np.telefone) + '" placeholder="(21) 99999-9999"></div>' +
+      '</div>' +
+      '<button class="btn on" type="button" data-act="add-professor">Adicionar</button>' +
+      '</section>' +
       '<div class="lista-cards">' + S.professores.map(function (p, i) {
         const turmasDele = S.turmas.filter(function (t) { return L.norm(t.professor) === L.norm(p.nome); });
+        const ocorrencias = ocorrenciasDoProfessor(p.nome);
+        const horas = horasDoProfessor(p.nome);
+        const totalMes = totalHorasNoMes(p.nome, mesAtual);
         return '<div class="card-turma">' +
           '<div class="ct-topo"><b>' + esc(p.nome) + '</b></div>' +
           '<div class="ct-linha">' + turmasDele.length + ' turma(s) no total</div>' +
           '<div class="campo"><label>Telefone (WhatsApp)</label><input type="text" data-act="tel-prof" data-i="' + i + '" value="' + esc(p.telefone || '') + '" placeholder="(21) 99999-9999"></div>' +
-          (p.telefone ? ('<div class="ct-acoes"><a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(p.telefone, 'Olá, ' + p.nome.split(' ')[0] + '! Aqui é da Washington Ilha.') + '">Chamar no WhatsApp</a></div>') : '') +
+          '<div class="ct-acoes">' +
+          (p.telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(p.telefone, 'Olá, ' + p.nome.split(' ')[0] + '! Aqui é da Washington Ilha.') + '">Chamar no WhatsApp</a>') : '') +
+          '<button class="btn sm" type="button" data-act="excluir-professor" data-i="' + i + '">Excluir professor</button>' +
+          '</div>' +
+          '<h4>Faltas, reposições e substituições</h4>' +
+          '<div class="campos-matricula">' +
+          '<select id="oc-tipo-' + i + '"><option value="falta">Falta</option><option value="reposicao">Reposição</option><option value="substituicao">Substituição</option></select>' +
+          '<input type="date" id="oc-data-' + i + '" value="' + HOJE + '">' +
+          '<input type="text" id="oc-obs-' + i + '" placeholder="Observação (opcional, ex.: turma, motivo…)">' +
+          '</div>' +
+          '<button class="btn sm" type="button" data-act="add-ocorrencia-professor" data-prof="' + esc(p.nome) + '" data-i="' + i + '">Registrar</button>' +
+          (ocorrencias.length ? ('<ul class="lista-alunos">' + ocorrencias.map(function (o) {
+            return '<li class="aluno-turma-linha"><div><b>' + esc(tipoOcorrenciaLabel(o.tipo)) + '</b> · ' + esc(L.fmtCurta(o.data)) + (o.obs ? (' · ' + esc(o.obs)) : '') + '</div>' +
+              '<div class="aluno-turma-acoes"><button class="btn sm" type="button" data-act="excluir-ocorrencia-professor" data-id="' + o.id + '">Excluir</button></div></li>';
+          }).join('') + '</ul>') : '<p class="muted">Nenhuma ocorrência registrada.</p>') +
+          '<h4>Horas-aula por semana</h4>' +
+          '<p class="muted">Total lançado em ' + esc(nomeMes(mesAtual)) + ': <b>' + totalMes.toLocaleString('pt-BR') + 'h</b></p>' +
+          '<div class="campos-matricula">' +
+          '<input type="date" id="ha-semana-' + i + '" value="' + L.segundaDaSemana(HOJE) + '">' +
+          '<input type="text" inputmode="decimal" id="ha-horas-' + i + '" placeholder="Ex.: 12,5">' +
+          '</div>' +
+          '<button class="btn sm" type="button" data-act="add-horas-aula" data-prof="' + esc(p.nome) + '" data-i="' + i + '">Lançar semana</button>' +
+          (horas.length ? ('<ul class="lista-alunos">' + horas.map(function (h) {
+            return '<li class="aluno-turma-linha"><div>Semana de <b>' + esc(L.fmtCurta(h.semana)) + '</b> · ' + (h.horas ? (esc(h.horas) + 'h') : '—') + '</div>' +
+              '<div class="aluno-turma-acoes"><button class="btn sm" type="button" data-act="excluir-horas-aula" data-id="' + h.id + '">Excluir</button></div></li>';
+          }).join('') + '</ul>') : '<p class="muted">Nenhuma semana lançada ainda.</p>') +
           '</div>';
       }).join('') + '</div>';
   }
@@ -1197,11 +1292,13 @@
   function cardAlunoRematriculaProxima(x) {
     const a = x.aluno, info = x.info;
     const turma = a.turmas && a.turmas[0];
+    const jaEnviada = !!(a.rematricula && a.rematricula.enviada);
     return '<div class="aviso aviso-atencao">' +
-      '<p><b>' + esc(a.nome) + '</b> · ' + tagRematricula(info) + '</p>' +
+      '<p><b>' + esc(a.nome) + '</b> · ' + tagRematricula(info) + (jaEnviada ? ' <span class="tag tag-ok">Mensagem enviada</span>' : '') + '</p>' +
       '<div class="ct-acoes">' +
       '<button class="btn sm" type="button" data-act="ver-aluno" data-id="' + a.id + '">Abrir cadastro</button> ' +
       (a.telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemRematricula(a, turma)) + '">Mandar WhatsApp de rematrícula</a>') : '<span class="muted">Sem telefone cadastrado</span>') +
+      '<button class="btn sm' + (jaEnviada ? ' on-ok' : '') + '" type="button" data-act="marcar-rematricula" data-id="' + a.id + '">' + (jaEnviada ? '✓ Enviada' : '✓ Marcar como enviada') + '</button>' +
       '</div></div>';
   }
   /* ---------- Aniversariantes próximos: quem faz aniversário nos próximos 30 dias, pra lembrar
@@ -1215,10 +1312,12 @@
   function cardAlunoAniversario(x) {
     const a = x.aluno;
     const quando = x.dias === 0 ? 'hoje! 🎂' : (x.dias === 1 ? 'amanhã' : ('em ' + x.dias + ' dia(s)'));
+    const jaEnviado = a.aniversarioUltimoAno === Number(HOJE.slice(0, 4));
     return '<div class="aviso aviso-atencao">' +
-      '<p><b>' + esc(a.nome) + '</b> · aniversário ' + quando + ' (' + esc(L.fmtCurta(a.dataNascimento)) + ')</p>' +
+      '<p><b>' + esc(a.nome) + '</b> · aniversário ' + quando + ' (' + esc(L.fmtCurta(a.dataNascimento)) + ')' + (jaEnviado ? ' <span class="tag tag-ok">Parabéns enviado</span>' : '') + '</p>' +
       '<div class="ct-acoes">' +
       (a.telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemAniversario(a)) + '">Mandar parabéns no WhatsApp</a>') : '<span class="muted">Sem telefone cadastrado</span>') +
+      '<button class="btn sm' + (jaEnviado ? ' on-ok' : '') + '" type="button" data-act="marcar-aniversario" data-id="' + a.id + '">' + (jaEnviado ? '✓ Enviado' : '✓ Marcar como enviado') + '</button>' +
       '</div></div>';
   }
   /* ---------- Detecta possíveis alunos duplicados (mesma pessoa cadastrada 2x) ----------
@@ -1466,6 +1565,7 @@
       '</div>' +
       '<div class="check"><label><input type="checkbox" data-act="bolsista-aluno" data-id="' + a.id + '"' + (a.bolsista ? ' checked' : '') + '> Aluno bolsista (não entra na cobrança/inadimplência)</label></div>' +
       '<div class="check"><label><input type="checkbox" data-act="livro-comprado-aluno" data-id="' + a.id + '"' + (a.livroDidatico.comprado ? ' checked' : '') + '> Já comprou o livro/material didático</label></div>' +
+      '<div class="campo"><label>Observações</label><textarea data-act="observacoes-aluno" data-id="' + a.id + '" rows="3" placeholder="Qualquer anotação sobre o aluno…">' + esc(a.observacoes || '') + '</textarea></div>' +
       '<h3>Cancelamento</h3>' +
       '<div class="check"><label><input type="checkbox" data-act="cancelamento-toggle" data-id="' + a.id + '"' + (a.cancelamento.solicitado ? ' checked' : '') + '> Aluno solicitou cancelamento</label></div>' +
       '<p class="muted">Marcar essa caixa já tira o aluno da lista de Ativos e manda ele pra aba Cancelados (mesmo antes de marcar "Cancelado" de fato).</p>' +
@@ -1492,8 +1592,10 @@
       ) : '<p class="muted">Cadastre o telefone acima para habilitar o envio de mensagens.</p>') +
       '<h3>Mensagens prontas (revise antes de mandar)</h3>' +
       '<div class="ct-acoes">' +
-      (temTel ? '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemRematricula(a, a.turmas && a.turmas[0])) + '" data-act="marcar-rematricula" data-id="' + a.id + '">Rematrícula</a>' : '<span class="muted">Cadastre o telefone para habilitar</span>') +
-      (temTel ? '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemMaterialDidatico(a, a.turmas && a.turmas[0], a.livroDidatico.qual)) + '" data-act="marcar-material" data-id="' + a.id + '">Material didático</a>' : '') +
+      (temTel ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemRematricula(a, a.turmas && a.turmas[0])) + '">Rematrícula</a>' +
+        '<button class="btn sm' + (a.rematricula.enviada ? ' on-ok' : '') + '" type="button" data-act="marcar-rematricula" data-id="' + a.id + '">' + (a.rematricula.enviada ? '✓ Enviada' : '✓ Marcar enviada') + '</button>') : '<span class="muted">Cadastre o telefone para habilitar</span>') +
+      (temTel ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemMaterialDidatico(a, a.turmas && a.turmas[0], a.livroDidatico.qual)) + '">Material didático</a>' +
+        '<button class="btn sm' + (a.materialDidatico.enviado ? ' on-ok' : '') + '" type="button" data-act="marcar-material" data-id="' + a.id + '">' + (a.materialDidatico.enviado ? '✓ Enviado' : '✓ Marcar enviado') + '</button>') : '') +
       (temTel ? '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemCobranca(a)) + '">Cobrança</a>' : '') +
       '</div>' +
       '<h3>Cancelar matrícula ou excluir aluno</h3>' +
@@ -1659,6 +1761,7 @@
     'semana-prof-limpar': function () { V.semProfsOcultos = {}; render(); },
     'ir-aba': function (el) { V.view = el.dataset.view; render(); },
     'filtro-sit': function (el) { V.fSit = el.value; render(); },
+    'filtro-prof-turma': function (el) { V.fProf = el.value; render(); },
     'filtro-pag': function (el) { V.fPag = el.value; render(); },
     'busca-aluno': function (el) { V.buscaAluno = el.value; render(); },
     'busca-aluno-cancelado': function (el) { V.buscaAlunoCancelado = el.value; render(); },
@@ -1684,6 +1787,71 @@
     },
     'busca-geral': function (el) { V.buscaTurma = el.value; render(); },
     'tel-prof': function (el) { S.professores[Number(el.dataset.i)].telefone = el.value; LS.set('professores', S.professores); registrar('Editou telefone de professor', S.professores[Number(el.dataset.i)].nome); },
+    'np-nome': function (el) { V.novoProfessor.nome = el.value; },
+    'np-telefone': function (el) { V.novoProfessor.telefone = el.value; },
+    'add-professor': function () {
+      const np = V.novoProfessor;
+      const nome = (np.nome || '').trim();
+      if (!nome) { toast('Informe o nome do professor.'); return; }
+      if (S.professores.some(function (p) { return L.norm(p.nome) === L.norm(nome); })) { toast('Já existe um professor com esse nome.'); return; }
+      S.professores.push({ nome: nome, telefone: (np.telefone || '').trim() });
+      LS.set('professores', S.professores);
+      registrar('Incluiu professor', nome);
+      V.novoProfessor = { nome: '', telefone: '' };
+      toast('Professor incluído.');
+      render();
+    },
+    'excluir-professor': function (el) {
+      const i = Number(el.dataset.i);
+      const p = S.professores[i];
+      if (!p) return;
+      const turmasDele = S.turmas.filter(function (t) { return L.norm(t.professor) === L.norm(p.nome); });
+      const aviso = turmasDele.length ? (' Atenção: ' + turmasDele.length + ' turma(s) estão com esse nome como professor(a) — elas continuam mostrando o nome, mas ele sai da lista de Professores.') : '';
+      if (typeof confirm === 'function' && !confirm('Excluir o professor "' + p.nome + '"?' + aviso)) return;
+      S.professores = S.professores.filter(function (x, idx) { return idx !== i; });
+      LS.set('professores', S.professores);
+      registrar('Excluiu professor', p.nome);
+      toast('Professor excluído.');
+      render();
+    },
+    'add-ocorrencia-professor': function (el) {
+      const i = el.dataset.i;
+      const tipo = $('#oc-tipo-' + i).value;
+      const data = $('#oc-data-' + i).value;
+      const obs = $('#oc-obs-' + i).value;
+      if (!data) { toast('Escolha a data.'); return; }
+      const oc = { id: proxId('oc', S.ocorrenciasProfessor), professor: el.dataset.prof, tipo: tipo, data: data, obs: (obs || '').trim(), criadoEm: new Date().toISOString() };
+      S.ocorrenciasProfessor.push(oc);
+      LS.set('ocorrenciasProfessor', S.ocorrenciasProfessor);
+      registrar('Registrou ' + tipoOcorrenciaLabel(tipo).toLowerCase() + ' de professor', el.dataset.prof + ' · ' + data);
+      toast('Ocorrência registrada.');
+      render();
+    },
+    'excluir-ocorrencia-professor': function (el) {
+      S.ocorrenciasProfessor = S.ocorrenciasProfessor.filter(function (o) { return o.id !== el.dataset.id; });
+      LS.set('ocorrenciasProfessor', S.ocorrenciasProfessor);
+      render();
+    },
+    'add-horas-aula': function (el) {
+      const i = el.dataset.i;
+      const semanaBruta = $('#ha-semana-' + i).value;
+      const horas = normalizarValorMoeda($('#ha-horas-' + i).value);
+      if (!semanaBruta) { toast('Escolha uma data da semana.'); return; }
+      if (!horas) { toast('Informe as horas.'); return; }
+      const semana = L.segundaDaSemana(semanaBruta);
+      const existente = S.horasAula.find(function (h) { return L.norm(h.professor) === L.norm(el.dataset.prof) && h.semana === semana; });
+      if (existente) { existente.horas = horas; }
+      else { S.horasAula.push({ id: proxId('ha', S.horasAula), professor: el.dataset.prof, semana: semana, horas: horas }); }
+      LS.set('horasAula', S.horasAula);
+      registrar('Lançou horas-aula', el.dataset.prof + ' · semana de ' + L.fmtCurta(semana) + ' · ' + horas + 'h');
+      toast('Semana lançada.');
+      render();
+    },
+    'excluir-horas-aula': function (el) {
+      S.horasAula = S.horasAula.filter(function (h) { return h.id !== el.dataset.id; });
+      LS.set('horasAula', S.horasAula);
+      render();
+    },
     'tel-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.telefone = el.value; LS.set('alunos', S.alunos); registrar('Editou telefone de aluno', a.nome); render(); } },
     'email-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.email = el.value; LS.set('alunos', S.alunos); } },
     'enviar-msg-livre': function (el) {
@@ -1828,11 +1996,21 @@
       toast('Marcado: não são a mesma pessoa. Esse aviso não aparece mais para esses cadastros.');
       recalc(); render();
     },
-    'marcar-rematricula': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.rematricula.enviada = true; a.rematricula.data = new Date().toISOString(); LS.set('alunos', S.alunos); registrar('Marcou mensagem de rematrícula como enviada', a.nome); } },
-    'marcar-material': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.materialDidatico.enviado = true; a.materialDidatico.data = new Date().toISOString(); LS.set('alunos', S.alunos); registrar('Marcou material didático como enviado', a.nome); } },
+    'marcar-rematricula': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.rematricula.enviada = !a.rematricula.enviada; a.rematricula.data = a.rematricula.enviada ? new Date().toISOString() : ''; LS.set('alunos', S.alunos); registrar('Marcou mensagem de rematrícula como ' + (a.rematricula.enviada ? 'enviada' : 'não enviada'), a.nome); render(); if (el.closest('dialog')) dlgAluno(a.id); } },
+    'marcar-material': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.materialDidatico.enviado = !a.materialDidatico.enviado; a.materialDidatico.data = a.materialDidatico.enviado ? new Date().toISOString() : ''; LS.set('alunos', S.alunos); registrar('Marcou material didático como ' + (a.materialDidatico.enviado ? 'enviado' : 'não enviado'), a.nome); render(); if (el.closest('dialog')) dlgAluno(a.id); } },
+    'marcar-aniversario': function (el) {
+      const a = D.alunoPorId[el.dataset.id];
+      if (!a) return;
+      const anoAtual = Number(HOJE.slice(0, 4));
+      a.aniversarioUltimoAno = a.aniversarioUltimoAno === anoAtual ? null : anoAtual;
+      LS.set('alunos', S.alunos);
+      registrar('Marcou parabéns de aniversário como ' + (a.aniversarioUltimoAno ? 'enviado' : 'não enviado'), a.nome);
+      render();
+    },
     'salvar-autor': function (el) { S.cfg.autor = el.value; LS.set('cfg', S.cfg); },
     'forma-pagamento-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.formaPagamento = el.value; LS.set('alunos', S.alunos); registrar('Definiu forma de pagamento', a.nome + ' → ' + el.value); render(); } },
     'livro-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.livroDidatico.qual = el.value; LS.set('alunos', S.alunos); } },
+    'observacoes-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.observacoes = el.value; LS.set('alunos', S.alunos); } },
     'data-inicio-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.dataInicio = el.value; LS.set('alunos', S.alunos); } },
     'rg-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.rg = el.value; LS.set('alunos', S.alunos); } },
     'cpf-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cpf = el.value; LS.set('alunos', S.alunos); } },
@@ -1863,7 +2041,7 @@
     'cancelamento-data': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cancelamento.data = el.value; LS.set('alunos', S.alunos); } },
     'cancelamento-motivo': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cancelamento.motivo = el.value; LS.set('alunos', S.alunos); registrar('Definiu motivo de cancelamento', a.nome + ' → ' + el.value); } },
     'baixar-data': function () {
-      const payload = { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados };
+      const payload = { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
       baixar('data.js', 'window.WASH_DATA = ' + JSON.stringify(payload, null, 1) + ';\n', 'text/javascript;charset=utf-8');
       toast('data.js baixado');
     },
@@ -1935,7 +2113,7 @@
         if (!nome) { toast('Informe o nome do aluno ou escolha um já cadastrado.'); return; }
         aluno = {
           id: proxId('al', S.alunos), nome: nome, telefone: '', email: '', turmas: [], formaPagamento: nm.formaPagamento || 'asaas', bolsista: false, cancelado: false, responsavelFinanceiro: '', dataInicio: nm.dataInicio || '',
-          rg: nm.rg || '', cpf: nm.cpf || '', dataNascimento: nm.dataNascimento || '', endereco: nm.endereco || '', cep: nm.cep || '', diaVencimento: nm.diaVencimento || '',
+          rg: nm.rg || '', cpf: nm.cpf || '', dataNascimento: nm.dataNascimento || '', endereco: nm.endereco || '', cep: nm.cep || '', diaVencimento: nm.diaVencimento || '', observacoes: '',
           pagamento: { status: 'desconhecido', obs: '', atualizadoEm: '', valorEmAberto: '' }, frequencia: {},
           materialDidatico: { enviado: false, data: '', obs: '' }, rematricula: { enviada: false, data: '', obs: '' },
           livroDidatico: { qual: '', comprado: false, mensagemEnviada: false },
@@ -2052,6 +2230,24 @@
       V.novoCompromisso = { titulo: '', alunoId: '', alunoNome: '', comQuem: 'Isa', data: '', horario: '', local: '', obs: '' };
       toast('Compromisso agendado.');
       recalc(); render();
+    },
+    'editar-compromisso': function (el) { dlgEditarCompromisso(el.dataset.id); },
+    'salvar-compromisso': function (el) {
+      const c = S.compromissos.find(function (x) { return x.id === el.dataset.id; });
+      if (!c) return;
+      const titulo = ($('#ec-titulo').value || '').trim();
+      if (!titulo) { toast('Dê um título ao compromisso.'); return; }
+      c.titulo = titulo;
+      c.comQuem = $('#ec-comquem').value;
+      c.data = $('#ec-data').value;
+      c.horario = $('#ec-horario').value;
+      c.local = $('#ec-local').value;
+      c.obs = $('#ec-obs').value;
+      LS.set('compromissos', S.compromissos);
+      registrar('Editou compromisso', c.titulo);
+      toast('Compromisso atualizado.');
+      fecharDlg();
+      render();
     },
     'compromisso-status': function (el) {
       const c = D.compromissoPorId[el.dataset.id];
@@ -2286,23 +2482,30 @@
     },
     'filtro-pendencia': function (el) { V.fPendencia = el.value; render(); },
     /* ---- Comunicados ---- */
-    'com-turma': function (el) { V.novoComunicado.turmaId = el.value; },
+    'com-turma-toggle': function (el) {
+      const nc = V.novoComunicado;
+      nc.turmaIds = nc.turmaIds || [];
+      const i = nc.turmaIds.indexOf(el.dataset.id);
+      if (el.checked && i === -1) nc.turmaIds.push(el.dataset.id);
+      else if (!el.checked && i > -1) nc.turmaIds.splice(i, 1);
+    },
     'com-mensagem': function (el) { V.novoComunicado.mensagem = el.value; },
     'gerar-comunicado': function () {
       const nc = V.novoComunicado;
       if (!nc.mensagem.trim()) { toast('Escreva a mensagem do comunicado.'); return; }
-      const c = { id: proxId('com', S.comunicados), data: HOJE, turmaId: nc.turmaId, mensagem: nc.mensagem.trim(), enviados: {}, criadoEm: new Date().toISOString() };
+      const turmaIds = nc.turmaIds || [];
+      const c = { id: proxId('com', S.comunicados), data: HOJE, turmaIds: turmaIds, mensagem: nc.mensagem.trim(), enviados: {}, criadoEm: new Date().toISOString() };
       S.comunicados.push(c);
       LS.set('comunicados', S.comunicados);
-      registrar('Criou comunicado', (c.turmaId ? (D.turmaPorId[c.turmaId] || {}).turma : 'todos') + ' · ' + c.mensagem.slice(0, 60));
-      V.novoComunicado = { mensagem: '', turmaId: '' };
+      registrar('Criou comunicado', (turmaIds.length ? turmaIds.map(function (id) { return (D.turmaPorId[id] || {}).turma; }).join(', ') : 'todos') + ' · ' + c.mensagem.slice(0, 60));
+      V.novoComunicado = { mensagem: '', turmaIds: [] };
       render();
     },
     'comunicado-marcar-enviado': function (el) {
       const c = S.comunicados.find(function (x) { return x.id === el.dataset.com; });
       if (!c) return;
       c.enviados = c.enviados || {};
-      c.enviados[el.dataset.aluno] = true;
+      c.enviados[el.dataset.aluno] = !c.enviados[el.dataset.aluno];
       LS.set('comunicados', S.comunicados);
       render();
     },
@@ -2372,7 +2575,7 @@
   /* ---------- Sincronização entre navegadores ---------- */
   function aplicarRemoto(dados) {
     let mudou = false;
-    ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados'].forEach(function (k) {
+    ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados', 'ocorrenciasProfessor', 'horasAula'].forEach(function (k) {
       if (dados[k] !== undefined) {
         S[k] = dados[k];
         if (k === 'alunos') normalizarAlunos(S.alunos);
@@ -2385,7 +2588,7 @@
   recalc();
 
   function estadoAtualParaSemear() {
-    return { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, cfg: S.cfg, log: S.log, asaasImportado: S.asaasImportado, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados };
+    return { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, cfg: S.cfg, log: S.log, asaasImportado: S.asaasImportado, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
   }
 
   let syncIniciado = false;

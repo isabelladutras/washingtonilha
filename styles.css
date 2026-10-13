@@ -69,6 +69,7 @@ main { padding: 1.6rem clamp(1rem, 3vw, 2.4rem) 3rem; min-width: 0; max-width: 8
 .btn:hover { border-color: var(--ink-3); }
 .btn.on { background: var(--brand); border-color: var(--brand); color: #fff; }
 .btn.on-erro { background: var(--erro); border-color: var(--erro); color: #fff; }
+.btn.on-ok { background: var(--ok); border-color: var(--ok); color: #fff; }
 .btn.sm { padding: 0.3rem 0.6rem; font-size: 0.8125rem; }
 .link { background: none; border: 0; padding: 0; color: var(--brand-strong); text-decoration: underline; font-weight: 600; }
 label { display: block; font-weight: 600; font-size: 0.8125rem; margin-bottom: 0.25rem; }
@@ -196,6 +197,8 @@ dialog::backdrop { background: rgba(10, 30, 26, 0.5); }
 .dlg-card .dlg-corpo { padding: 1rem 1.3rem; overflow-y: auto; display: grid; gap: 0.4rem; }
 .dlg-card .x { border: 0; background: none; font-size: 1.4rem; line-height: 1; padding: 0.1rem 0.4rem; color: var(--ink-2); }
 .lista-alunos { list-style: none; padding: 0; margin: 0; display: grid; gap: 0.3rem; }
+.lista-checkboxes-turmas { display: grid; gap: 0.25rem; max-height: 12rem; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; padding: 0.5rem 0.7rem; background: var(--card); }
+.lista-checkboxes-turmas .check { margin: 0.1rem 0; }
 .aluno-turma-linha { display: flex; align-items: center; justify-content: space-between; gap: 0.6rem; padding: 0.4rem 0; border-bottom: 1px solid var(--line-2); flex-wrap: wrap; }
 .aluno-turma-linha:last-child { border-bottom: 0; }
 .aluno-turma-acoes { display: flex; align-items: center; gap: 0.4rem; flex-wrap: wrap; }
