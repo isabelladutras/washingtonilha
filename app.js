@@ -9,7 +9,7 @@
 
   /* ---------- Armazenamento local (por navegador) + sincronização opcional entre navegadores ---------- */
   const Sync = window.Sync || { configured: function () { return false; }, init: function () {}, push: function () { return Promise.resolve(false); } };
-  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados', 'duplicadosIgnorados', 'ocorrenciasProfessor', 'horasAula'];
+  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados', 'modelosComunicado', 'duplicadosIgnorados', 'ocorrenciasProfessor', 'horasAula'];
   const LS = {
     get: function (k, def) { try { const v = localStorage.getItem('washington.' + k); return v == null ? def : JSON.parse(v); } catch (e) { return def; } },
     set: function (k, v) {
@@ -45,6 +45,7 @@
     despesas: LS.get('despesas', []),
     pendencias: LS.get('pendencias', []),
     comunicados: LS.get('comunicados', []),
+    modelosComunicado: LS.get('modelosComunicado', []),
     duplicadosIgnorados: LS.get('duplicadosIgnorados', []),
     ocorrenciasProfessor: LS.get('ocorrenciasProfessor', []),
     horasAula: LS.get('horasAula', []),
@@ -118,6 +119,7 @@
     if (normalizarValoresMoedaEm(S.matriculas, ['valorMensalidade', 'valorMaterial', 'desconto.valor'])) LS.set('matriculas', S.matriculas);
     if (normalizarValoresMoedaEm(S.alunos, ['pagamento.valorEmAberto'])) LS.set('alunos', S.alunos);
     if (normalizarValoresMoedaEm(S.horasAula, ['horas'])) LS.set('horasAula', S.horasAula);
+    if (normalizarValoresMoedaEm(S.professores, ['valorHoraAula'])) LS.set('professores', S.professores);
   }
   normalizarValoresMoeda();
 
@@ -162,10 +164,11 @@
     chamadaTurmaId: '', chamadaData: HOJE, chamadaPresencas: {},
     novoMaterial: { alunoId: '', alunoNome: '', turmaNome: '', semestre: L.semestreDeData(HOJE), pagoWashington: false, recebidoEm: '', dataEnvio: '', dataEntrega: '', entregue: false, obs: '' },
     novaEntrada: { data: HOJE, alunoId: '', alunoNome: '', valor: '', formaPagamento: 'Pix', referente: '', obs: '' },
-    novaDespesa: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '' },
+    novaDespesa: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false },
     fMesEntradas: '', fMesDespesas: '',
     novaPendencia: { texto: '', alunoId: '', turmaId: '', prazo: '' }, fPendencia: 'abertas',
     novoComunicado: { mensagem: '', turmaIds: [] },
+    novoModeloComunicado: { nome: '', texto: '' },
     novoProfessor: { nome: '', telefone: '' },
     semProfsOcultos: {},
     logado: !Sync.configured(), authEmail: '', loginEmail: '', loginSenha: '', loginErro: '', loginCarregando: false,
@@ -216,6 +219,7 @@
 
   /* ---------- Utilidades de interface ---------- */
   const ICON = {
+    geral: '<rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/>',
     semana: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',
     turmas: '<path d="M3 7l9-4 9 4-9 4-9-4Z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/>',
     professores: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.5-3.5 3-5.5 6.5-5.5s6 2 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .6 3.3 2.3 3.5 5.2"/>',
@@ -237,6 +241,7 @@
     cancelados: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/><path d="m8.5 17.5 7 4M15.5 17.5l-7 4"/>'
   };
   const VIEWS = [
+    { id: 'geral', nome: 'Visão geral' },
     { id: 'semana', nome: 'Semana' }, { id: 'pendencias', nome: 'Pendências' }, { id: 'turmas', nome: 'Turmas' }, { id: 'matriculas', nome: 'Matrículas' },
     { id: 'compromissos', nome: 'Compromissos' }, { id: 'frequencia', nome: 'Frequência' }, { id: 'inadimplencia', nome: 'Inadimplência' },
     { id: 'material', nome: 'Material' }, { id: 'entradas', nome: 'Entradas' }, { id: 'despesas', nome: 'Despesas' },
@@ -353,6 +358,7 @@
     const app = $('#app');
     const foco = capturarFoco(app);
     app.innerHTML = ({
+      geral: viewVisaoGeral,
       semana: viewSemana, pendencias: viewPendencias, turmas: viewTurmas, matriculas: viewMatriculas, compromissos: viewCompromissos,
       frequencia: viewFrequencia, inadimplencia: viewInadimplencia, material: viewMaterial, entradas: viewEntradas, despesas: viewDespesas,
       alunos: viewAlunos, comunicados: viewComunicados, professores: viewProfessores,
@@ -442,6 +448,36 @@
         '<span class="legenda-bolha" style="--pc:' + corDoProfessor(nome) + '"></span>' + esc(nome) + '</button>';
     }).join('');
     return '<div class="legenda-profs"><span class="muted legenda-dica">Clique para destacar só as turmas de um(a) professor(a):</span>' + legenda + (Object.keys(V.semProfsOcultos).length ? '<button class="btn sm" type="button" data-act="semana-prof-limpar">Mostrar todos</button>' : '') + '</div>';
+  }
+  /* ---------- Visão geral: números-chave de todas as abas, sem precisar entrar em cada uma pra
+     ver o que está pegando fogo. ---------- */
+  function statTileLink(numero, rotulo, view) {
+    return '<button class="stat-tile" type="button" data-act="ir-view" data-view="' + view + '" style="cursor:pointer;text-align:left">' +
+      '<b>' + numero + '</b><span>' + esc(rotulo) + '</span></button>';
+  }
+  function viewVisaoGeral() {
+    const mesAtual = mesDeData(HOJE);
+    const inad = S.alunos.filter(function (a) { return !a.bolsista && !a.cancelado && (a.pagamento.status === 'atrasado' || a.pagamento.status === 'pendente'); });
+    const totalAberto = inad.reduce(function (s, a) { const v = Number(normalizarValorMoeda(a.pagamento.valorEmAberto)); return s + (isNaN(v) ? 0 : v); }, 0);
+    const aniversariantes = alunosAniversariantesProximos();
+    const aniversariantesSemana = aniversariantes.filter(function (x) { return x.dias <= 7; });
+    const rematriculas = alunosRematriculaProxima();
+    const pendAtrasadas = S.pendencias.filter(function (p) { return !p.resolvida && p.prazo && p.prazo < HOJE; });
+    const entradasMes = totalLista(S.entradas, mesAtual);
+    const despesasMes = totalLista(S.despesas, mesAtual);
+    return '<div class="topo"><h1>Visão geral</h1></div>' +
+      '<div class="stats-topo">' +
+      statTileLink(inad.length, 'inadimplente(s)' + (totalAberto ? (' · ' + fmtReais(totalAberto)) : ''), 'inadimplencia') +
+      statTileLink(aniversariantesSemana.length, 'aniversariante(s) na semana', 'alunos') +
+      statTileLink(rematriculas.length, 'rematrícula(s) vencendo', 'alunos') +
+      statTileLink(pendAtrasadas.length, 'pendência(s) atrasada(s)', 'pendencias') +
+      '</div>' +
+      '<p class="muted">Saldo de ' + esc(nomeMes(mesAtual)) + ': entradas ' + fmtReais(entradasMes) + ' · despesas ' + fmtReais(despesasMes) + ' · ' + saldoTag(entradasMes - despesasMes) + '</p>' +
+      (aniversariantesSemana.length ? ('<h2 class="subtitulo">Aniversariantes na semana (' + aniversariantesSemana.length + ')</h2>' + aniversariantesSemana.map(cardAlunoAniversario).join('')) : '') +
+      (rematriculas.length ? ('<h2 class="subtitulo">Rematrículas vencendo (' + rematriculas.length + ')</h2>' + rematriculas.slice(0, 5).map(cardAlunoRematriculaProxima).join('') +
+        (rematriculas.length > 5 ? ('<p class="muted">+ ' + (rematriculas.length - 5) + ' outra(s) — veja todas em Alunos.</p>') : '')) : '') +
+      (pendAtrasadas.length ? ('<h2 class="subtitulo">Pendências atrasadas (' + pendAtrasadas.length + ')</h2>' + pendAtrasadas.map(linhaPendencia).join('')) : '') +
+      (!inad.length && !aniversariantesSemana.length && !rematriculas.length && !pendAtrasadas.length ? '<p class="muted">Nada pegando fogo agora. 🎉</p>' : '');
   }
   function viewSemana() {
     if (V.semanaModo === 'dia') return viewDia();
@@ -884,6 +920,18 @@
       const r = L.resumoFrequencia(S.frequencias, id);
       return (r.total >= 3 && r.pct < 75) ? { aluno: a, resumo: r } : null;
     }).filter(Boolean).sort(function (x, y) { return x.resumo.pct - y.resumo.pct; });
+    /* Faltas acumuladas no semestre selecionado (não é alerta de risco, é a contagem bruta por
+       aluno — sinal de quem está acumulando faltas antes de virar um problema de evasão). */
+    const turmaIdsSemestre = {};
+    turmasDoSemestre.forEach(function (t) { turmaIdsSemestre[t.id] = true; });
+    const chamadasSemestre = S.frequencias.filter(function (c) { return turmaIdsSemestre[c.turmaId]; });
+    const idsComChamadaSemestre = Array.from(new Set(chamadasSemestre.reduce(function (acc, c) { return acc.concat(Object.keys(c.presencas || {})); }, [])));
+    const faltasPorAluno = idsComChamadaSemestre.map(function (id) {
+      const a = D.alunoPorId[id];
+      if (!a) return null;
+      const r = L.resumoFrequencia(chamadasSemestre, id);
+      return r.faltas > 0 ? { aluno: a, resumo: r } : null;
+    }).filter(Boolean).sort(function (x, y) { return y.resumo.faltas - x.resumo.faltas; });
     return '<div class="topo"><h1>Frequência</h1><div class="topo-acoes">' + semBtns + '</div></div>' +
       '<section class="bloco">' +
       '<h2>Fazer chamada</h2>' +
@@ -904,7 +952,9 @@
           return '<li>' + esc(L.fmtCurta(c.data)) + ' · ' + presentes + '/' + total + ' presente(s) · <button class="link" type="button" data-act="editar-chamada" data-turma="' + c.turmaId + '" data-data="' + c.data + '">editar</button></li>';
         }).join('') + '</ul>') : '') +
       (alertas.length ? ('<h2 class="subtitulo">Faltas recorrentes (presença abaixo de 75%)</h2><ul class="lista-log">' +
-        alertas.map(function (x) { return '<li><b>' + esc(x.aluno.nome) + '</b> · ' + x.resumo.pct + '% de presença (' + x.resumo.presencas + '/' + x.resumo.total + ')</li>'; }).join('') + '</ul>') : '');
+        alertas.map(function (x) { return '<li><b>' + esc(x.aluno.nome) + '</b> · ' + x.resumo.pct + '% de presença (' + x.resumo.presencas + '/' + x.resumo.total + ')</li>'; }).join('') + '</ul>') : '') +
+      (faltasPorAluno.length ? ('<h2 class="subtitulo">Faltas acumuladas no semestre ' + esc(V.semestre) + ' (' + faltasPorAluno.length + ')</h2><ul class="lista-log">' +
+        faltasPorAluno.map(function (x) { return '<li><b>' + esc(x.aluno.nome) + '</b> · ' + x.resumo.faltas + ' falta(s) de ' + x.resumo.total + ' aula(s) registrada(s) (' + x.resumo.pct + '% presença)</li>'; }).join('') + '</ul>') : '');
   }
 
   /* ---------- Inadimplência (régua de cobrança) ---------- */
@@ -913,12 +963,24 @@
     const cob = a.cobranca || { etapa: 0, enviadoEm: '' };
     const etapasTxt = ['Lembrete', '2º aviso', 'Aviso final'];
     const turmasTxt = (a.turmas || []).map(function (x) { return x.turma; }).join(', ');
+    /* Sugestão de etapa pelo tempo de atraso (não decide nada sozinho, só indica): até 7 dias
+       sugere o Lembrete, até 15 o 2º aviso, acima disso o Aviso final — só aparece quando a
+       etapa já marcada está atrás do que o atraso atual sugere. */
+    const diasAtraso = a.pagamento.status === 'atrasado' ? L.diasEmAtraso(a.diaVencimento, HOJE) : null;
+    let sugestao = '';
+    if (diasAtraso != null && diasAtraso >= 0) {
+      const etapaSugerida = diasAtraso <= 7 ? 1 : (diasAtraso <= 15 ? 2 : 3);
+      if (etapaSugerida > cob.etapa) {
+        sugestao = '<div class="ct-linha"><span class="tag tag-aviso">Atrasado há ' + diasAtraso + ' dia(s)</span> · sugestão: enviar "' + esc(etapasTxt[etapaSugerida - 1]) + '"</div>';
+      }
+    }
     return '<div class="card-turma">' +
       '<div class="ct-topo"><b>' + esc(a.nome) + '</b>' + pagamentoBadge(a.pagamento.status) + '</div>' +
       '<div class="ct-linha muted">' + esc(turmasTxt || '—') + (a.telefone ? (' · ' + esc(a.telefone)) : '') + '</div>' +
       (a.pagamento.obs ? ('<div class="ct-linha muted">' + esc(a.pagamento.obs) + '</div>') : '') +
       '<div class="campo"><label>Valor em aberto (R$)</label><input type="text" inputmode="decimal" data-act="valor-aberto-aluno" data-id="' + a.id + '" value="' + esc(a.pagamento.valorEmAberto || '') + '" placeholder="Ex.: 207.00"></div>' +
       (cob.etapa ? ('<div class="ct-linha">Última cobrança enviada: <b>' + esc(etapasTxt[cob.etapa - 1] || ('etapa ' + cob.etapa)) + '</b>' + (cob.enviadoEm ? (' · ' + relTempo(cob.enviadoEm)) : '') + '</div>') : '<div class="ct-linha muted">Nenhuma cobrança enviada ainda</div>') +
+      sugestao +
       '<div class="ct-acoes">' +
       (temTel ? [1, 2, 3].map(function (et) {
         const marcada = cob.etapa === et;
@@ -995,6 +1057,13 @@
     return MESES[Number(p[1]) - 1] + ' de ' + p[0];
   }
   function mesesDisponiveis(lista) { return Array.from(new Set(lista.map(function (x) { return mesDeData(x.data); }).filter(Boolean))).sort().reverse(); }
+  /* Soma o campo "valor" (R$) de uma lista (entradas ou despesas), opcionalmente só de um mês
+     específico (AAAA-MM) — usado pra calcular o saldo (entradas − despesas) do período. */
+  function totalLista(lista, mesFiltro) {
+    const l = mesFiltro ? lista.filter(function (x) { return mesDeData(x.data) === mesFiltro; }) : lista;
+    return l.reduce(function (s, x) { const v = Number(normalizarValorMoeda(x.valor)); return s + (isNaN(v) ? 0 : v); }, 0);
+  }
+  function saldoTag(saldo) { return '<span class="tag ' + (saldo >= 0 ? 'tag-ok' : 'tag-erro') + '">saldo ' + fmtReais(saldo) + '</span>'; }
   function linhaEntrada(e) {
     return '<tr>' +
       '<td><input type="date" data-act="en-editar-data" data-id="' + e.id + '" value="' + esc(e.data || '') + '"></td>' +
@@ -1012,7 +1081,8 @@
     const lista = (V.fMesEntradas ? S.entradas.filter(function (e) { return mesDeData(e.data) === V.fMesEntradas; }) : S.entradas.slice())
       .sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
     const total = lista.reduce(function (s, e) { const v = Number(normalizarValorMoeda(e.valor)); return s + (isNaN(v) ? 0 : v); }, 0);
-    return '<div class="topo"><h1>Entradas</h1></div>' +
+    const despesasMesmoPeriodo = totalLista(S.despesas, V.fMesEntradas);
+    return '<div class="topo"><h1>Entradas</h1><div class="topo-acoes"><button class="btn sm" type="button" data-act="exportar-entradas-csv">Baixar CSV</button></div></div>' +
       '<section class="bloco">' +
       '<h2>Registrar entrada</h2>' +
       '<div class="campos-matricula">' +
@@ -1030,7 +1100,7 @@
       '</section>' +
       '<div class="filtros">' +
       '<select data-act="filtro-mes-entradas"><option value="">Todos os meses</option>' + meses.map(function (m) { return '<option value="' + m + '"' + (V.fMesEntradas === m ? ' selected' : '') + '>' + esc(nomeMes(m)) + '</option>'; }).join('') + '</select>' +
-      '<span class="muted">' + lista.length + ' lançamento(s) · total ' + fmtReais(total) + '</span>' +
+      '<span class="muted">' + lista.length + ' lançamento(s) · total ' + fmtReais(total) + ' · despesas no mesmo período ' + fmtReais(despesasMesmoPeriodo) + '</span> ' + saldoTag(total - despesasMesmoPeriodo) +
       '</div>' +
       (lista.length ? ('<table class="tabela"><thead><tr><th>Data</th><th>Aluno</th><th>Valor</th><th>Forma</th><th>Referente a</th><th></th></tr></thead><tbody>' + lista.map(linhaEntrada).join('') + '</tbody></table>') : '<p class="muted">Nenhuma entrada registrada ainda.</p>');
   }
@@ -1052,16 +1122,35 @@
       '<td><button type="button" class="btn sm" data-act="excluir-despesa" data-id="' + d.id + '">Excluir</button></td>' +
       '</tr>';
   }
+  /* ---------- Despesas fixas/recorrentes: a gente guarda o "modelo" como a própria despesa mais
+     recente marcada como fixa (mesma descrição), e oferece lançar uma cópia dela no mês atual com
+     1 clique, em vez de redigitar todo mês. Não deixa lançar 2x no mesmo mês pra não duplicar. ---------- */
+  function despesasFixasModelos() {
+    const porDescricao = {};
+    S.despesas.filter(function (d) { return d.fixa; }).forEach(function (d) {
+      const chave = L.norm(d.descricao);
+      if (!chave) return;
+      if (!porDescricao[chave] || (d.data || '') > (porDescricao[chave].data || '')) porDescricao[chave] = d;
+    });
+    return Object.keys(porDescricao).map(function (k) { return porDescricao[k]; })
+      .sort(function (a, b) { return L.norm(a.descricao).localeCompare(L.norm(b.descricao)); });
+  }
+  function despesaFixaJaLancadaNoMes(modelo, ym) {
+    return S.despesas.some(function (d) { return L.norm(d.descricao) === L.norm(modelo.descricao) && mesDeData(d.data) === ym; });
+  }
   function viewDespesas() {
     const nd = V.novaDespesa;
     const meses = mesesDisponiveis(S.despesas);
     const lista = (V.fMesDespesas ? S.despesas.filter(function (d) { return mesDeData(d.data) === V.fMesDespesas; }) : S.despesas.slice())
       .sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
     const total = lista.reduce(function (s, d) { const v = Number(normalizarValorMoeda(d.valor)); return s + (isNaN(v) ? 0 : v); }, 0);
+    const entradasMesmoPeriodo = totalLista(S.entradas, V.fMesDespesas);
     const porCategoria = {};
     lista.forEach(function (d) { const v = Number(normalizarValorMoeda(d.valor)); porCategoria[d.categoria || 'Outro'] = (porCategoria[d.categoria || 'Outro'] || 0) + (isNaN(v) ? 0 : v); });
     const categoriasOrdenadas = Object.keys(porCategoria).sort(function (a, b) { return porCategoria[b] - porCategoria[a]; });
-    return '<div class="topo"><h1>Despesas</h1></div>' +
+    const mesAtual = mesDeData(HOJE);
+    const modelosFixos = despesasFixasModelos();
+    return '<div class="topo"><h1>Despesas</h1><div class="topo-acoes"><button class="btn sm" type="button" data-act="exportar-despesas-csv">Baixar CSV</button></div></div>' +
       '<section class="bloco">' +
       '<h2>Registrar despesa</h2>' +
       '<div class="campos-matricula">' +
@@ -1072,13 +1161,22 @@
       '<div class="campo"><label>Pago por</label><input type="text" list="lista-pagopor" data-act="de-pagopor" value="' + esc(nd.pagoPor) + '" placeholder="Ex.: Isabella, Camila, Conta do curso"></div>' +
       '</div>' +
       '<div class="check"><label><input type="checkbox" data-act="de-pago"' + (nd.pago ? ' checked' : '') + '> Já foi pago</label></div>' +
+      '<div class="check"><label><input type="checkbox" data-act="de-fixa"' + (nd.fixa ? ' checked' : '') + '> Despesa fixa/recorrente (repete todo mês)</label></div>' +
       '<div class="campo"><label>Observação</label><input type="text" data-act="de-obs" value="' + esc(nd.obs) + '" placeholder="Opcional"></div>' +
       '<datalist id="lista-pagopor">' + opcoesQuemPagaDespesa().map(function (q) { return '<option value="' + esc(q) + '">'; }).join('') + '</datalist>' +
       '<button class="btn on" type="button" data-act="add-despesa">Registrar</button>' +
       '</section>' +
+      (modelosFixos.length ? ('<section class="bloco"><h2>Despesas fixas (' + modelosFixos.length + ')</h2>' +
+        '<p class="muted">Lance de novo em ' + esc(nomeMes(mesAtual)) + ' com 1 clique, sem redigitar.</p>' +
+        modelosFixos.map(function (m) {
+          const jaLancada = despesaFixaJaLancadaNoMes(m, mesAtual);
+          return '<div class="ct-linha">' + esc(m.descricao) + ' · ' + esc(m.categoria || '—') + ' · ' + esc(fmtReais(m.valor) || '—') +
+            (jaLancada ? ' <span class="tag tag-ok">Já lançada este mês</span>' : ' <button class="btn sm" type="button" data-act="lancar-despesa-fixa" data-desc="' + esc(m.descricao) + '">Lançar em ' + esc(nomeMes(mesAtual)) + '</button>') +
+            '</div>';
+        }).join('') + '</section>') : '') +
       '<div class="filtros">' +
       '<select data-act="filtro-mes-despesas"><option value="">Todos os meses</option>' + meses.map(function (m) { return '<option value="' + m + '"' + (V.fMesDespesas === m ? ' selected' : '') + '>' + esc(nomeMes(m)) + '</option>'; }).join('') + '</select>' +
-      '<span class="muted">' + lista.length + ' lançamento(s) · total ' + fmtReais(total) + '</span>' +
+      '<span class="muted">' + lista.length + ' lançamento(s) · total ' + fmtReais(total) + ' · entradas no mesmo período ' + fmtReais(entradasMesmoPeriodo) + '</span> ' + saldoTag(entradasMesmoPeriodo - total) +
       '</div>' +
       (categoriasOrdenadas.length ? ('<p class="muted">' + categoriasOrdenadas.map(function (c) { return esc(c) + ': ' + fmtReais(porCategoria[c]); }).join(' · ') + '</p>') : '') +
       (lista.length ? ('<table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + lista.map(linhaDespesa).join('') + '</tbody></table>') : '<p class="muted">Nenhuma despesa registrada ainda.</p>');
@@ -1153,6 +1251,7 @@
     const nEnviados = alunosAlvo.filter(function (a) { return enviados[a.id]; }).length;
     return '<div class="bloco"><div class="ct-topo"><b>' + esc(L.fmtCurta(c.data)) + ' · ' + (turmas.length ? esc(turmas.map(function (t) { return t.turma; }).join(', ')) : 'Todos os alunos com WhatsApp') + '</b>' +
       '<span class="tag tag-neutro">' + nEnviados + ' / ' + alunosAlvo.length + ' enviado(s)</span>' +
+      (alunosAlvo.length ? ('<button class="btn sm" type="button" data-act="copiar-telefones-comunicado" data-id="' + c.id + '">Copiar telefones</button>') : '') +
       '<button class="btn sm" type="button" data-act="excluir-comunicado" data-id="' + c.id + '">Excluir</button></div>' +
       '<p>' + esc(c.mensagem) + '</p>' +
       (alunosAlvo.length ? ('<ul class="lista-alunos">' + alunosAlvo.map(function (a) {
@@ -1166,10 +1265,28 @@
   }
   function viewComunicados() {
     const nc = V.novoComunicado;
+    const nm = V.novoModeloComunicado;
     const turmaIds = nc.turmaIds || [];
     const lista = S.comunicados.slice().sort(function (a, b) { return (b.data || '').localeCompare(a.data || '') || (b.id || '').localeCompare(a.id || ''); });
+    const modelos = S.modelosComunicado.slice().sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
     return '<div class="topo"><h1>Comunicados</h1></div>' +
       '<p class="muted">Escreva um aviso e dispare para todos os alunos de uma ou mais turmas (ou de todas) por WhatsApp, acompanhando quem já recebeu.</p>' +
+      '<section class="bloco">' +
+      '<h2>Mensagens-modelo</h2>' +
+      '<p class="muted">Salve textos usados com frequência (ex.: "aula remarcada", "lembrete de material") pra não redigitar toda vez.</p>' +
+      (modelos.length ? ('<ul class="lista-alunos">' + modelos.map(function (m) {
+        return '<li class="aluno-turma-linha"><div><b>' + esc(m.nome) + '</b><div class="muted">' + esc(m.texto.length > 80 ? (m.texto.slice(0, 80) + '…') : m.texto) + '</div></div>' +
+          '<div class="aluno-turma-acoes">' +
+          '<button class="btn sm" type="button" data-act="usar-modelo-comunicado" data-id="' + m.id + '">Usar este modelo</button>' +
+          '<button class="btn sm" type="button" data-act="excluir-modelo-comunicado" data-id="' + m.id + '">Excluir</button>' +
+          '</div></li>';
+      }).join('') + '</ul>') : '<p class="muted">Nenhum modelo salvo ainda.</p>') +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Nome do modelo</label><input type="text" data-act="modelo-nome" value="' + esc(nm.nome) + '" placeholder="Ex.: Aula remarcada"></div>' +
+      '</div>' +
+      '<div class="campo"><label>Texto do modelo</label><textarea data-act="modelo-texto" rows="2" placeholder="Escreva o texto do modelo…">' + esc(nm.texto) + '</textarea></div>' +
+      '<button class="btn sm" type="button" data-act="add-modelo-comunicado">Salvar modelo</button>' +
+      '</section>' +
       '<section class="bloco">' +
       '<h2>Novo comunicado</h2>' +
       '<div class="campo"><label>Turmas (deixe tudo desmarcado para todos os alunos com WhatsApp cadastrado)</label>' +
@@ -1218,6 +1335,7 @@
           '<div class="ct-topo"><b>' + esc(p.nome) + '</b></div>' +
           '<div class="ct-linha">' + turmasDele.length + ' turma(s) no total</div>' +
           '<div class="campo"><label>Telefone (WhatsApp)</label><input type="text" data-act="tel-prof" data-i="' + i + '" value="' + esc(p.telefone || '') + '" placeholder="(21) 99999-9999"></div>' +
+          '<div class="campo"><label>Valor da hora-aula (R$)</label><input type="text" inputmode="decimal" data-act="valor-hora-professor" data-i="' + i + '" value="' + esc(p.valorHoraAula || '') + '" placeholder="Ex.: 35.00"></div>' +
           '<div class="ct-acoes">' +
           (p.telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(p.telefone, 'Olá, ' + p.nome.split(' ')[0] + '! Aqui é da Washington Ilha.') + '">Chamar no WhatsApp</a>') : '') +
           '<button class="btn sm" type="button" data-act="excluir-professor" data-i="' + i + '">Excluir professor</button>' +
@@ -1234,7 +1352,8 @@
               '<div class="aluno-turma-acoes"><button class="btn sm" type="button" data-act="excluir-ocorrencia-professor" data-id="' + o.id + '">Excluir</button></div></li>';
           }).join('') + '</ul>') : '<p class="muted">Nenhuma ocorrência registrada.</p>') +
           '<h4>Horas-aula por semana</h4>' +
-          '<p class="muted">Total lançado em ' + esc(nomeMes(mesAtual)) + ': <b>' + totalMes.toLocaleString('pt-BR') + 'h</b></p>' +
+          '<p class="muted">Total lançado em ' + esc(nomeMes(mesAtual)) + ': <b>' + totalMes.toLocaleString('pt-BR') + 'h</b>' +
+          (p.valorHoraAula ? (' · a pagar: <b>' + esc(fmtReais(totalMes * Number(normalizarValorMoeda(p.valorHoraAula)))) + '</b>') : '') + '</p>' +
           '<div class="campos-matricula">' +
           '<input type="date" id="ha-semana-' + i + '" value="' + L.segundaDaSemana(HOJE) + '">' +
           '<input type="text" inputmode="decimal" id="ha-horas-' + i + '" placeholder="Ex.: 12,5">' +
@@ -1612,7 +1731,12 @@
     const avisos = D.conflitos;
     return '<div class="topo"><h1>Conferência</h1></div>' +
       (avisos.length ? ('<div class="lista-avisos">' + avisos.map(function (w) {
-        return '<div class="aviso aviso-' + (w.tipo === 'sem-sala' ? 'atencao' : 'erro') + '"><p>' + esc(w.msg) + '</p></div>';
+        const idsUnicos = (w.turmas || []).filter(function (id, i, arr) { return arr.indexOf(id) === i; });
+        return '<div class="aviso aviso-' + (w.tipo === 'sem-sala' ? 'atencao' : 'erro') + '"><p>' + esc(w.msg) + '</p>' +
+          '<div class="ct-acoes">' + idsUnicos.map(function (id) {
+            const t = D.turmaPorId[id];
+            return t ? ('<button class="btn sm" type="button" data-act="editar-turma" data-id="' + t.id + '">Corrigir "' + esc(t.turma) + '"</button>') : '';
+          }).join('') + '</div></div>';
       }).join('') + '</div>') : '<p class="muted">Nenhum choque de professor, sala ou falta de sala encontrado. 🎉</p>');
   }
 
@@ -1671,6 +1795,7 @@
 
   /* ---------- Ações (data-act) ---------- */
   const ACTS = {
+    'ir-view': function (el) { V.view = el.dataset.view; render(); },
     'baixar-ics': function (el) { const t = D.turmaPorId[el.dataset.id]; if (t) L.baixarIcsTurma(t); },
     'ver-turma': function (el) { dlgTurma(el.dataset.id); },
     'nova-turma': function () { dlgEditarTurma(null); },
@@ -1785,8 +1910,28 @@
       }
       registrar('Exportou lista de alunos em CSV', aba === 'cancelados' ? 'Cancelados' : 'Ativos');
     },
+    'exportar-entradas-csv': function () {
+      const lista = (V.fMesEntradas ? S.entradas.filter(function (e) { return mesDeData(e.data) === V.fMesEntradas; }) : S.entradas.slice())
+        .sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
+      const linhas = lista.map(function (e) { return [e.data || '', e.alunoNome || '', normalizarValorMoeda(e.valor) || '', e.formaPagamento || '', e.referente || '', e.obs || '']; });
+      baixarCSV('entradas.csv', ['Data', 'Aluno', 'Valor', 'Forma de pagamento', 'Referente a', 'Observação'], linhas);
+      registrar('Exportou Entradas em CSV', V.fMesEntradas ? nomeMes(V.fMesEntradas) : 'todos os meses');
+    },
+    'exportar-despesas-csv': function () {
+      const lista = (V.fMesDespesas ? S.despesas.filter(function (d) { return mesDeData(d.data) === V.fMesDespesas; }) : S.despesas.slice())
+        .sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
+      const linhas = lista.map(function (d) { return [d.data || '', d.descricao || '', d.categoria || '', normalizarValorMoeda(d.valor) || '', d.pagoPor || '', d.pago ? 'Pago' : 'A pagar', d.obs || '']; });
+      baixarCSV('despesas.csv', ['Data', 'Descrição', 'Categoria', 'Valor', 'Pago por', 'Status', 'Observação'], linhas);
+      registrar('Exportou Despesas em CSV', V.fMesDespesas ? nomeMes(V.fMesDespesas) : 'todos os meses');
+    },
     'busca-geral': function (el) { V.buscaTurma = el.value; render(); },
     'tel-prof': function (el) { S.professores[Number(el.dataset.i)].telefone = el.value; LS.set('professores', S.professores); registrar('Editou telefone de professor', S.professores[Number(el.dataset.i)].nome); },
+    'valor-hora-professor': function (el) {
+      const p = S.professores[Number(el.dataset.i)];
+      if (!p) return;
+      p.valorHoraAula = normalizarValorMoeda(el.value);
+      LS.set('professores', S.professores);
+    },
     'np-nome': function (el) { V.novoProfessor.nome = el.value; },
     'np-telefone': function (el) { V.novoProfessor.telefone = el.value; },
     'add-professor': function () {
@@ -2041,7 +2186,7 @@
     'cancelamento-data': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cancelamento.data = el.value; LS.set('alunos', S.alunos); } },
     'cancelamento-motivo': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cancelamento.motivo = el.value; LS.set('alunos', S.alunos); registrar('Definiu motivo de cancelamento', a.nome + ' → ' + el.value); } },
     'baixar-data': function () {
-      const payload = { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
+      const payload = { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados, modelosComunicado: S.modelosComunicado, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
       baixar('data.js', 'window.WASH_DATA = ' + JSON.stringify(payload, null, 1) + ';\n', 'text/javascript;charset=utf-8');
       toast('data.js baixado');
     },
@@ -2404,6 +2549,7 @@
     'de-valor': function (el) { V.novaDespesa.valor = el.value; },
     'de-pagopor': function (el) { V.novaDespesa.pagoPor = el.value; },
     'de-pago': function (el) { V.novaDespesa.pago = el.checked; render(); },
+    'de-fixa': function (el) { V.novaDespesa.fixa = el.checked; render(); },
     'de-obs': function (el) { V.novaDespesa.obs = el.value; },
     'filtro-mes-despesas': function (el) { V.fMesDespesas = el.value; render(); },
     'add-despesa': function () {
@@ -2413,14 +2559,32 @@
       if (!nd.valor) { toast('Informe o valor.'); return; }
       const despesa = {
         id: proxId('des', S.despesas), data: nd.data, descricao: nd.descricao.trim(), categoria: nd.categoria || 'Outro',
-        valor: normalizarValorMoeda(nd.valor), pagoPor: (nd.pagoPor || '').trim(), pago: !!nd.pago, obs: nd.obs || '',
+        valor: normalizarValorMoeda(nd.valor), pagoPor: (nd.pagoPor || '').trim(), pago: !!nd.pago, fixa: !!nd.fixa, obs: nd.obs || '',
         criadoEm: new Date().toISOString(), criadoPor: autorAtual(),
       };
       S.despesas.push(despesa);
       LS.set('despesas', S.despesas);
       registrar('Registrou despesa', despesa.descricao + ' · ' + fmtReais(nd.valor));
-      V.novaDespesa = { data: nd.data, descricao: '', categoria: nd.categoria || 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '' };
+      V.novaDespesa = { data: nd.data, descricao: '', categoria: nd.categoria || 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false };
       toast('Despesa registrada.');
+      render();
+    },
+    /* Lança no mês atual uma cópia de uma despesa fixa já cadastrada (mesma descrição/categoria/
+       valor/pago por), sem precisar redigitar tudo de novo. */
+    'lancar-despesa-fixa': function (el) {
+      const modelo = despesasFixasModelos().find(function (m) { return m.descricao === el.dataset.desc; });
+      if (!modelo) return;
+      const mesAtual = mesDeData(HOJE);
+      if (despesaFixaJaLancadaNoMes(modelo, mesAtual)) { toast('Essa despesa já foi lançada este mês.'); return; }
+      const despesa = {
+        id: proxId('des', S.despesas), data: HOJE, descricao: modelo.descricao, categoria: modelo.categoria || 'Outro',
+        valor: modelo.valor, pagoPor: modelo.pagoPor || '', pago: false, fixa: true, obs: modelo.obs || '',
+        criadoEm: new Date().toISOString(), criadoPor: autorAtual(),
+      };
+      S.despesas.push(despesa);
+      LS.set('despesas', S.despesas);
+      registrar('Lançou despesa fixa do mês', despesa.descricao + ' · ' + fmtReais(despesa.valor));
+      toast('Despesa fixa lançada em ' + nomeMes(mesAtual) + '.');
       render();
     },
     'despesa-toggle': function (el) {
@@ -2518,6 +2682,44 @@
       registrar('Excluiu comunicado', c.mensagem.slice(0, 60));
       render();
     },
+    /* Copia os telefones da lista de envio de um comunicado, um por linha — útil pra quem prefere
+       montar uma lista de transmissão direto no WhatsApp (que não tem o risco de bloqueio dos
+       links automáticos em sequência). */
+    'copiar-telefones-comunicado': function (el) {
+      const c = S.comunicados.find(function (x) { return x.id === el.dataset.id; });
+      if (!c) return;
+      const telefones = alunosDoComunicado(c).map(function (a) { return a.telefone; }).filter(Boolean);
+      if (!telefones.length) { toast('Nenhum telefone pra copiar.'); return; }
+      copiar(telefones.join('\n'));
+    },
+    /* ---- Mensagens-modelo (Comunicados) ---- */
+    'modelo-nome': function (el) { V.novoModeloComunicado.nome = el.value; },
+    'modelo-texto': function (el) { V.novoModeloComunicado.texto = el.value; },
+    'add-modelo-comunicado': function () {
+      const nm = V.novoModeloComunicado;
+      if (!nm.nome.trim()) { toast('Dê um nome pro modelo.'); return; }
+      if (!nm.texto.trim()) { toast('Escreva o texto do modelo.'); return; }
+      S.modelosComunicado.push({ id: proxId('mod', S.modelosComunicado), nome: nm.nome.trim(), texto: nm.texto.trim() });
+      LS.set('modelosComunicado', S.modelosComunicado);
+      registrar('Salvou modelo de comunicado', nm.nome.trim());
+      V.novoModeloComunicado = { nome: '', texto: '' };
+      toast('Modelo salvo.');
+      render();
+    },
+    'usar-modelo-comunicado': function (el) {
+      const m = S.modelosComunicado.find(function (x) { return x.id === el.dataset.id; });
+      if (!m) return;
+      V.novoComunicado.mensagem = m.texto;
+      render();
+    },
+    'excluir-modelo-comunicado': function (el) {
+      const m = S.modelosComunicado.find(function (x) { return x.id === el.dataset.id; });
+      if (!m) return;
+      S.modelosComunicado = S.modelosComunicado.filter(function (x) { return x.id !== m.id; });
+      LS.set('modelosComunicado', S.modelosComunicado);
+      registrar('Excluiu modelo de comunicado', m.nome);
+      render();
+    },
     /* ---- Login ---- */
     'login-email': function (el) { V.loginEmail = el.value; },
     'login-senha': function (el) { V.loginSenha = el.value; },
@@ -2575,7 +2777,7 @@
   /* ---------- Sincronização entre navegadores ---------- */
   function aplicarRemoto(dados) {
     let mudou = false;
-    ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados', 'ocorrenciasProfessor', 'horasAula'].forEach(function (k) {
+    ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados', 'modelosComunicado', 'ocorrenciasProfessor', 'horasAula'].forEach(function (k) {
       if (dados[k] !== undefined) {
         S[k] = dados[k];
         if (k === 'alunos') normalizarAlunos(S.alunos);
@@ -2588,7 +2790,7 @@
   recalc();
 
   function estadoAtualParaSemear() {
-    return { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, cfg: S.cfg, log: S.log, asaasImportado: S.asaasImportado, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
+    return { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, cfg: S.cfg, log: S.log, asaasImportado: S.asaasImportado, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados, modelosComunicado: S.modelosComunicado, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
   }
 
   let syncIniciado = false;

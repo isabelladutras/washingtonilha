@@ -158,6 +158,29 @@
     return isoDeData(d);
   }
 
+  /**
+   * Dias de atraso a partir de um "dia de vencimento" mensal (1-31) e a data de hoje. Acha o
+   * vencimento mais recente que já passou (deste mês, ou do mês anterior se o dia deste mês
+   * ainda não chegou) e devolve a diferença em dias. Devolve null se o dia de vencimento não
+   * for um número válido. Usado só como sugestão (não decide nada sozinho).
+   */
+  function diasEmAtraso(diaVencimento, hojeISO) {
+    const dia = parseInt(diaVencimento, 10);
+    if (!dia || dia < 1 || dia > 31) return null;
+    const hoje = new Date((hojeISO || new Date().toISOString().slice(0, 10)) + 'T00:00:00');
+    function ultimoDiaDoMes(ano, mesZeroBased) { return new Date(ano, mesZeroBased + 1, 0).getDate(); }
+    function candidato(ano, mesZeroBased) {
+      return new Date(ano, mesZeroBased, Math.min(dia, ultimoDiaDoMes(ano, mesZeroBased)));
+    }
+    let c = candidato(hoje.getFullYear(), hoje.getMonth());
+    if (c.getTime() > hoje.getTime()) {
+      let mes = hoje.getMonth() - 1, ano = hoje.getFullYear();
+      if (mes < 0) { mes = 11; ano--; }
+      c = candidato(ano, mes);
+    }
+    return Math.round((hoje.getTime() - c.getTime()) / 86400000);
+  }
+
   /** Segunda-feira da semana de uma data ISO (ou de hoje, se omitida). */
   function segundaDaSemana(dataISO) {
     const d = new Date((dataISO || new Date().toISOString().slice(0, 10)) + 'T00:00:00');
@@ -432,7 +455,7 @@
     DIAS_ORDEM: DIAS_ORDEM, DIAS_FULL: DIAS_FULL,
     norm: norm, diasDaTurma: diasDaTurma, horarioMin: horarioMin, horariosSeSobrepoem: horariosSeSobrepoem,
     gradeSemanal: gradeSemanal, conferirConflitos: conferirConflitos, juntarNatural: juntarNatural,
-    fimContrato: fimContrato, diasAte: diasAte, semestreDeData: semestreDeData,
+    fimContrato: fimContrato, diasAte: diasAte, semestreDeData: semestreDeData, diasEmAtraso: diasEmAtraso,
     somaDias: somaDias, segundaDaSemana: segundaDaSemana, fmtCurta: fmtCurta, fmtLonga: fmtLonga, horaParaMin: horaParaMin,
     telefoneParaWhatsApp: telefoneParaWhatsApp, linkWhatsApp: linkWhatsApp,
     mensagemRematricula: mensagemRematricula, mensagemMaterialDidatico: mensagemMaterialDidatico, mensagemCobranca: mensagemCobranca,
