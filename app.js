@@ -27,7 +27,7 @@
     turmas: LS.get('turmas', null) || (DATA.turmas || []).map(function (t) { return Object.assign({}, t); }),
     alunos: alunosSalvos || (DATA.alunos || []).map(function (a) {
       return Object.assign({ formaPagamento: 'desconhecido', email: '', bolsista: false, cancelado: false, dataInicio: '', responsavelFinanceiro: '', rg: '', cpf: '', dataNascimento: '', endereco: '', cep: '', diaVencimento: '', observacoes: '', aniversarioUltimoAno: null }, a, {
-        pagamento: Object.assign({ valorEmAberto: '' }, a.pagamento), frequencia: Object.assign({}, a.frequencia),
+        pagamento: Object.assign({ valorEmAberto: '', pagamentos: [] }, a.pagamento), frequencia: Object.assign({}, a.frequencia),
         materialDidatico: Object.assign({}, a.materialDidatico), rematricula: Object.assign({}, a.rematricula),
         livroDidatico: Object.assign({ qual: '', comprado: false, mensagemEnviada: false }, a.livroDidatico),
         cobranca: Object.assign({ etapa: 0, enviadoEm: '' }, a.cobranca),
@@ -121,6 +121,17 @@
     if (normalizarValoresMoedaEm(S.horasAula, ['horas'])) LS.set('horasAula', S.horasAula);
     if (normalizarValoresMoedaEm(S.professores, ['valorHoraAula'])) LS.set('professores', S.professores);
   }
+  /* Valor padrão da hora-aula (R$), usado pra preencher automaticamente professores que ainda não
+     têm esse valor definido (cadastrados antes desse campo existir) — e professores novos. Isa
+     confirmou que hoje R$ 25,20 vale igual pra todos; quem tiver um valor diferente continua como
+     está, porque só preenchemos quando o campo está vazio. */
+  const VALOR_HORA_AULA_PADRAO = '25.2';
+  function normalizarValorHoraAulaProfessores() {
+    let mudou = false;
+    S.professores.forEach(function (p) { if (p.valorHoraAula == null || p.valorHoraAula === '') { p.valorHoraAula = VALOR_HORA_AULA_PADRAO; mudou = true; } });
+    if (mudou) LS.set('professores', S.professores);
+  }
+  normalizarValorHoraAulaProfessores();
   normalizarValoresMoeda();
 
   /* ---------- Migração: traz dados novos (ex.: telefone/e-mail importados) sem apagar edições manuais ---------- */
@@ -167,9 +178,10 @@
     novaDespesa: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false },
     fMesEntradas: '', fMesDespesas: '',
     novaPendencia: { texto: '', alunoId: '', turmaId: '', prazo: '' }, fPendencia: 'abertas',
-    novoComunicado: { mensagem: '', turmaIds: [] },
+    novoComunicado: { mensagem: '', turmaIds: [], disponivelEm: '' },
     novoModeloComunicado: { nome: '', texto: '' },
     novoProfessor: { nome: '', telefone: '' },
+    novaOcorrenciaProfessor: { professor: '', tipo: 'falta', data: HOJE, obs: '' }, fProfOcorrencia: '',
     semProfsOcultos: {},
     logado: !Sync.configured(), authEmail: '', loginEmail: '', loginSenha: '', loginErro: '', loginCarregando: false,
   };
@@ -223,6 +235,7 @@
     semana: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/>',
     turmas: '<path d="M3 7l9-4 9 4-9 4-9-4Z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/>',
     professores: '<circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.5-3.5 3-5.5 6.5-5.5s6 2 6.5 5.5M16 4.5a3.5 3.5 0 0 1 0 7M18 14.8c2 .6 3.3 2.3 3.5 5.2"/>',
+    ocorrencias: '<path d="M4 21V4a1 1 0 0 1 1-1h11l3 4-3 4H5"/>',
     alunos: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/>',
     matriculas: '<path d="M8 3h8l4 4v13a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M16 3v4h4"/><path d="m8.5 13 2 2 4-4.5"/>',
     compromissos: '<rect x="3" y="4" width="18" height="17" rx="2"/><path d="M3 9h18M8 2v4M16 2v4"/><path d="M8 14h2M8 17h2M14 14h2"/>',
@@ -246,7 +259,7 @@
     { id: 'compromissos', nome: 'Compromissos' }, { id: 'frequencia', nome: 'Frequência' }, { id: 'inadimplencia', nome: 'Inadimplência' },
     { id: 'material', nome: 'Material' }, { id: 'entradas', nome: 'Entradas' }, { id: 'despesas', nome: 'Despesas' },
     { id: 'alunos', nome: 'Alunos' }, { id: 'comunicados', nome: 'Comunicados' },
-    { id: 'professores', nome: 'Professores' }, { id: 'conferencia', nome: 'Conferência' },
+    { id: 'professores', nome: 'Professores' }, { id: 'ocorrencias', nome: 'Ocorrências' }, { id: 'conferencia', nome: 'Conferência' },
     { id: 'buscar', nome: 'Buscar' }, { id: 'dados', nome: 'Dados' }
   ];
   function svg(id) { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICON[id] + '</svg>'; }
@@ -361,10 +374,11 @@
       geral: viewVisaoGeral,
       semana: viewSemana, pendencias: viewPendencias, turmas: viewTurmas, matriculas: viewMatriculas, compromissos: viewCompromissos,
       frequencia: viewFrequencia, inadimplencia: viewInadimplencia, material: viewMaterial, entradas: viewEntradas, despesas: viewDespesas,
-      alunos: viewAlunos, comunicados: viewComunicados, professores: viewProfessores,
+      alunos: viewAlunos, comunicados: viewComunicados, professores: viewProfessores, ocorrencias: viewOcorrencias,
       conferencia: viewConferencia, buscar: viewBuscar, dados: viewDados
     }[V.view] || viewSemana)();
     if (!restaurarFoco(app, foco)) app.focus();
+    atualizarTituloAba();
   }
 
   function sitBadge(sit) {
@@ -377,6 +391,11 @@
     return '<span class="' + cls + '">' + esc(sit || '—') + '</span>';
   }
 
+  const VAGAS_POR_TURMA = 12;
+  function vagasTag(nAlunos) {
+    const cheia = nAlunos >= VAGAS_POR_TURMA;
+    return '<span class="tag ' + (cheia ? 'tag-erro' : (nAlunos >= VAGAS_POR_TURMA - 2 ? 'tag-aviso' : 'tag-neutro')) + '">' + nAlunos + '/' + VAGAS_POR_TURMA + ' vaga(s)' + (cheia ? ' · turma cheia' : '') + '</span>';
+  }
   function cardTurma(t, opts) {
     opts = opts || {};
     const nAlunos = (t.alunosNomes || []).length;
@@ -384,7 +403,7 @@
       '<div class="ct-topo"><b>' + esc(t.turma) + '</b>' + sitBadge(t.situacao) + (t.encerraProxSemestre ? '<span class="tag tag-aviso">Encerra próx. semestre</span>' : '') + '</div>' +
       '<div class="ct-linha">' + esc(t.dia) + ' · ' + esc(t.horario) + (t.sala ? (' · ' + esc(t.sala)) : '') + '</div>' +
       '<div class="ct-linha">Professor(a): ' + esc(t.professor || '—') + '</div>' +
-      '<div class="ct-linha muted">' + nAlunos + ' aluno(s) nesta turma · ' + esc(t.semestre) + '</div>' +
+      '<div class="ct-linha muted">' + esc(t.semestre) + ' · ' + vagasTag(nAlunos) + '</div>' +
       (opts.acoes !== false ? ('<div class="ct-acoes">' +
         '<button class="btn sm" type="button" data-act="ver-turma" data-id="' + t.id + '">Ver alunos</button>' +
         '<button class="btn sm" type="button" data-act="editar-turma" data-id="' + t.id + '">Editar</button>' +
@@ -455,14 +474,29 @@
     return '<button class="stat-tile" type="button" data-act="ir-view" data-view="' + view + '" style="cursor:pointer;text-align:left">' +
       '<b>' + numero + '</b><span>' + esc(rotulo) + '</span></button>';
   }
-  function viewVisaoGeral() {
-    const mesAtual = mesDeData(HOJE);
+  /* Números que viram alerta tanto na Visão geral quanto no indicador ambiente (título da aba do
+     navegador) — centralizados aqui pra não calcular a mesma coisa em dois lugares diferentes. */
+  function contarAlertasGerais() {
     const inad = S.alunos.filter(function (a) { return !a.bolsista && !a.cancelado && (a.pagamento.status === 'atrasado' || a.pagamento.status === 'pendente'); });
     const totalAberto = inad.reduce(function (s, a) { const v = Number(normalizarValorMoeda(a.pagamento.valorEmAberto)); return s + (isNaN(v) ? 0 : v); }, 0);
-    const aniversariantes = alunosAniversariantesProximos();
-    const aniversariantesSemana = aniversariantes.filter(function (x) { return x.dias <= 7; });
+    const aniversariantesSemana = alunosAniversariantesProximos().filter(function (x) { return x.dias <= 7; });
     const rematriculas = alunosRematriculaProxima();
     const pendAtrasadas = S.pendencias.filter(function (p) { return !p.resolvida && p.prazo && p.prazo < HOJE; });
+    const despAtrasadas = despesasAtrasadas();
+    const total = inad.length + aniversariantesSemana.length + rematriculas.length + pendAtrasadas.length + despAtrasadas.length;
+    return { inad: inad, totalAberto: totalAberto, aniversariantesSemana: aniversariantesSemana, rematriculas: rematriculas, pendAtrasadas: pendAtrasadas, despAtrasadas: despAtrasadas, total: total };
+  }
+  /* Indicador ambiente: mostra "(N)" no título da aba do navegador quando há alertas pendentes,
+     pra dar pra notar sem precisar abrir/entrar no painel — só olhando a aba já dá pra ver. */
+  function atualizarTituloAba() {
+    const n = contarAlertasGerais().total;
+    document.title = (n > 0 ? ('(' + n + ') ') : '') + 'Painel acadêmico · Washington Ilha';
+  }
+  function viewVisaoGeral() {
+    const mesAtual = mesDeData(HOJE);
+    const alertas = contarAlertasGerais();
+    const inad = alertas.inad, totalAberto = alertas.totalAberto, aniversariantesSemana = alertas.aniversariantesSemana,
+      rematriculas = alertas.rematriculas, pendAtrasadas = alertas.pendAtrasadas, despAtrasadas = alertas.despAtrasadas;
     const entradasMes = totalLista(S.entradas, mesAtual);
     const despesasMes = totalLista(S.despesas, mesAtual);
     return '<div class="topo"><h1>Visão geral</h1></div>' +
@@ -471,13 +505,15 @@
       statTileLink(aniversariantesSemana.length, 'aniversariante(s) na semana', 'alunos') +
       statTileLink(rematriculas.length, 'rematrícula(s) vencendo', 'alunos') +
       statTileLink(pendAtrasadas.length, 'pendência(s) atrasada(s)', 'pendencias') +
+      statTileLink(despAtrasadas.length, 'despesa(s) atrasada(s)', 'despesas') +
       '</div>' +
       '<p class="muted">Saldo de ' + esc(nomeMes(mesAtual)) + ': entradas ' + fmtReais(entradasMes) + ' · despesas ' + fmtReais(despesasMes) + ' · ' + saldoTag(entradasMes - despesasMes) + '</p>' +
       (aniversariantesSemana.length ? ('<h2 class="subtitulo">Aniversariantes na semana (' + aniversariantesSemana.length + ')</h2>' + aniversariantesSemana.map(cardAlunoAniversario).join('')) : '') +
       (rematriculas.length ? ('<h2 class="subtitulo">Rematrículas vencendo (' + rematriculas.length + ')</h2>' + rematriculas.slice(0, 5).map(cardAlunoRematriculaProxima).join('') +
         (rematriculas.length > 5 ? ('<p class="muted">+ ' + (rematriculas.length - 5) + ' outra(s) — veja todas em Alunos.</p>') : '')) : '') +
       (pendAtrasadas.length ? ('<h2 class="subtitulo">Pendências atrasadas (' + pendAtrasadas.length + ')</h2>' + pendAtrasadas.map(linhaPendencia).join('')) : '') +
-      (!inad.length && !aniversariantesSemana.length && !rematriculas.length && !pendAtrasadas.length ? '<p class="muted">Nada pegando fogo agora. 🎉</p>' : '');
+      (despAtrasadas.length ? ('<h2 class="subtitulo">Despesas atrasadas (' + despAtrasadas.length + ')</h2><table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + despAtrasadas.map(linhaDespesa).join('') + '</tbody></table>') : '') +
+      (!inad.length && !aniversariantesSemana.length && !rematriculas.length && !pendAtrasadas.length && !despAtrasadas.length ? '<p class="muted">Nada pegando fogo agora. 🎉</p>' : '');
   }
   function viewSemana() {
     if (V.semanaModo === 'dia') return viewDia();
@@ -646,7 +682,7 @@
     abrirDlg('<article class="dlg-card"><header><h2>' + esc(t.turma) + '</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header>' +
       '<div class="dlg-corpo">' +
       '<p>' + esc(t.dia) + ' · ' + esc(t.horario) + (t.sala ? (' · ' + esc(t.sala)) : '') + ' · Professor(a): ' + esc(t.professor || '—') + '</p>' +
-      '<p>' + sitBadge(t.situacao) + (t.encerraProxSemestre ? ' <span class="tag tag-aviso">Encerra no próximo semestre</span>' : '') + '</p>' +
+      '<p>' + sitBadge(t.situacao) + (t.encerraProxSemestre ? ' <span class="tag tag-aviso">Encerra no próximo semestre</span>' : '') + ' ' + vagasTag(alunosDaTurma.length) + '</p>' +
       (t.obs ? ('<p class="muted">Obs.: ' + esc(t.obs) + '</p>') : '') +
       '<h3>Alunos (' + alunosDaTurma.length + ')</h3>' +
       (alunosDaTurma.length ? ('<ul class="lista-alunos">' + alunosDaTurma.map(function (x) {
@@ -724,6 +760,7 @@
       (D.alunoPorId[m.alunoId] && D.alunoPorId[m.alunoId].telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(D.alunoPorId[m.alunoId].telefone, L.mensagemMaterialDidatico(D.alunoPorId[m.alunoId], t, m.livro)) + '">Avisar sobre o livro</a>' +
         '<button class="btn sm' + (D.alunoPorId[m.alunoId].materialDidatico.enviado ? ' on-ok' : '') + '" type="button" data-act="marcar-material" data-id="' + m.alunoId + '">' + (D.alunoPorId[m.alunoId].materialDidatico.enviado ? '✓ Avisado' : '✓ Marcar como avisado') + '</button>') : '<span class="muted">Cadastre o telefone do aluno para avisar sobre o livro</span>') +
       '<button class="btn sm" type="button" data-act="editar-matricula" data-id="' + m.id + '">Editar matrícula</button>' +
+      (dias != null && dias <= 30 ? ('<button class="btn sm on" type="button" data-act="renovar-matricula" data-id="' + m.id + '">Renovar matrícula</button>') : '') +
       '<button class="btn sm" type="button" data-act="excluir-matricula" data-id="' + m.id + '">Excluir matrícula</button>' +
       '</div></div>';
   }
@@ -961,6 +998,7 @@
   function cardInadimplencia(a) {
     const temTel = !!a.telefone;
     const cob = a.cobranca || { etapa: 0, enviadoEm: '' };
+    const pagamentos = (a.pagamento.pagamentos || []).slice().sort(function (x, y) { return (x.data || '').localeCompare(y.data || ''); });
     const etapasTxt = ['Lembrete', '2º aviso', 'Aviso final'];
     const turmasTxt = (a.turmas || []).map(function (x) { return x.turma; }).join(', ');
     /* Sugestão de etapa pelo tempo de atraso (não decide nada sozinho, só indica): até 7 dias
@@ -981,6 +1019,12 @@
       '<div class="campo"><label>Valor em aberto (R$)</label><input type="text" inputmode="decimal" data-act="valor-aberto-aluno" data-id="' + a.id + '" value="' + esc(a.pagamento.valorEmAberto || '') + '" placeholder="Ex.: 207.00"></div>' +
       (cob.etapa ? ('<div class="ct-linha">Última cobrança enviada: <b>' + esc(etapasTxt[cob.etapa - 1] || ('etapa ' + cob.etapa)) + '</b>' + (cob.enviadoEm ? (' · ' + relTempo(cob.enviadoEm)) : '') + '</div>') : '<div class="ct-linha muted">Nenhuma cobrança enviada ainda</div>') +
       sugestao +
+      (pagamentos.length ? ('<div class="ct-linha muted">Pagamentos registrados: ' + pagamentos.map(function (p) { return esc(L.fmtCurta(p.data)) + ' ' + esc(fmtReais(p.valor)); }).join(' · ') + '</div>') : '') +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Registrar pagamento parcial/total (R$)</label><input type="text" inputmode="decimal" id="pg-valor-' + a.id + '" placeholder="Ex.: 100.00"></div>' +
+      '<div class="campo"><label>Obs. (opcional)</label><input type="text" id="pg-obs-' + a.id + '" placeholder="Ex.: Pix recebido hoje"></div>' +
+      '</div>' +
+      '<div class="ct-acoes"><button class="btn sm" type="button" data-act="add-pagamento-aluno" data-id="' + a.id + '">Registrar pagamento</button></div>' +
       '<div class="ct-acoes">' +
       (temTel ? [1, 2, 3].map(function (et) {
         const marcada = cob.etapa === et;
@@ -1064,6 +1108,9 @@
     return l.reduce(function (s, x) { const v = Number(normalizarValorMoeda(x.valor)); return s + (isNaN(v) ? 0 : v); }, 0);
   }
   function saldoTag(saldo) { return '<span class="tag ' + (saldo >= 0 ? 'tag-ok' : 'tag-erro') + '">saldo ' + fmtReais(saldo) + '</span>'; }
+  /* Despesas marcadas como "a pagar" cuja data já passou (atrasadas) — pra alertar antes que
+     passe batido, já que não tinha nenhum aviso pra despesa vencida e ainda não paga. */
+  function despesasAtrasadas() { return S.despesas.filter(function (d) { return !d.pago && d.data && d.data < HOJE; }); }
   function linhaEntrada(e) {
     return '<tr>' +
       '<td><input type="date" data-act="en-editar-data" data-id="' + e.id + '" value="' + esc(e.data || '') + '"></td>' +
@@ -1150,7 +1197,12 @@
     const categoriasOrdenadas = Object.keys(porCategoria).sort(function (a, b) { return porCategoria[b] - porCategoria[a]; });
     const mesAtual = mesDeData(HOJE);
     const modelosFixos = despesasFixasModelos();
+    const atrasadas = despesasAtrasadas();
     return '<div class="topo"><h1>Despesas</h1><div class="topo-acoes"><button class="btn sm" type="button" data-act="exportar-despesas-csv">Baixar CSV</button></div></div>' +
+      (atrasadas.length ? ('<section class="bloco"><h2>⚠️ Despesas atrasadas (' + atrasadas.length + ')</h2>' +
+        '<p class="muted">Marcadas como "a pagar" com data já passada · total ' + fmtReais(totalLista(atrasadas)) + '</p>' +
+        '<table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + atrasadas.map(linhaDespesa).join('') + '</tbody></table>' +
+        '</section>') : '') +
       '<section class="bloco">' +
       '<h2>Registrar despesa</h2>' +
       '<div class="campos-matricula">' +
@@ -1249,25 +1301,29 @@
     const alunosAlvo = alunosDoComunicado(c);
     const enviados = c.enviados || {};
     const nEnviados = alunosAlvo.filter(function (a) { return enviados[a.id]; }).length;
+    const agendado = !!(c.disponivelEm && c.disponivelEm > HOJE);
     return '<div class="bloco"><div class="ct-topo"><b>' + esc(L.fmtCurta(c.data)) + ' · ' + (turmas.length ? esc(turmas.map(function (t) { return t.turma; }).join(', ')) : 'Todos os alunos com WhatsApp') + '</b>' +
-      '<span class="tag tag-neutro">' + nEnviados + ' / ' + alunosAlvo.length + ' enviado(s)</span>' +
-      (alunosAlvo.length ? ('<button class="btn sm" type="button" data-act="copiar-telefones-comunicado" data-id="' + c.id + '">Copiar telefones</button>') : '') +
+      (agendado ? ('<span class="tag tag-aviso">Agendado para ' + esc(L.fmtCurta(c.disponivelEm)) + '</span>') : ('<span class="tag tag-neutro">' + nEnviados + ' / ' + alunosAlvo.length + ' enviado(s)</span>')) +
+      (!agendado && alunosAlvo.length ? ('<button class="btn sm" type="button" data-act="copiar-telefones-comunicado" data-id="' + c.id + '">Copiar telefones</button>') : '') +
       '<button class="btn sm" type="button" data-act="excluir-comunicado" data-id="' + c.id + '">Excluir</button></div>' +
       '<p>' + esc(c.mensagem) + '</p>' +
-      (alunosAlvo.length ? ('<ul class="lista-alunos">' + alunosAlvo.map(function (a) {
-        const jaEnviado = !!enviados[a.id];
-        return '<li class="aluno-turma-linha"><div>' + esc(a.nome) + (jaEnviado ? ' <span class="tag tag-ok">Enviado</span>' : '') + '</div>' +
-          '<div class="aluno-turma-acoes">' +
-          '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, c.mensagem) + '">Abrir no WhatsApp</a>' +
-          '<button class="btn sm' + (jaEnviado ? ' on-ok' : '') + '" type="button" data-act="comunicado-marcar-enviado" data-com="' + c.id + '" data-aluno="' + a.id + '">' + (jaEnviado ? '✓ Enviado' : '✓ Marcar como enviado') + '</button>' +
-          '</div></li>';
-      }).join('') + '</ul>') : '<p class="muted">Nenhum aluno com telefone cadastrado nessa(s) turma(s).</p>');
+      (agendado ? '<p class="muted">Os botões de envio liberam automaticamente a partir de ' + esc(L.fmtCurta(c.disponivelEm)) + '.</p>' :
+        (alunosAlvo.length ? ('<ul class="lista-alunos">' + alunosAlvo.map(function (a) {
+          const jaEnviado = !!enviados[a.id];
+          return '<li class="aluno-turma-linha"><div>' + esc(a.nome) + (jaEnviado ? ' <span class="tag tag-ok">Enviado</span>' : '') + '</div>' +
+            '<div class="aluno-turma-acoes">' +
+            '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, c.mensagem) + '">Abrir no WhatsApp</a>' +
+            '<button class="btn sm' + (jaEnviado ? ' on-ok' : '') + '" type="button" data-act="comunicado-marcar-enviado" data-com="' + c.id + '" data-aluno="' + a.id + '">' + (jaEnviado ? '✓ Enviado' : '✓ Marcar como enviado') + '</button>' +
+            '</div></li>';
+        }).join('') + '</ul>') : '<p class="muted">Nenhum aluno com telefone cadastrado nessa(s) turma(s).</p>'));
   }
   function viewComunicados() {
     const nc = V.novoComunicado;
     const nm = V.novoModeloComunicado;
     const turmaIds = nc.turmaIds || [];
     const lista = S.comunicados.slice().sort(function (a, b) { return (b.data || '').localeCompare(a.data || '') || (b.id || '').localeCompare(a.id || ''); });
+    const agendados = lista.filter(function (c) { return c.disponivelEm && c.disponivelEm > HOJE; });
+    const disponiveis = lista.filter(function (c) { return !(c.disponivelEm && c.disponivelEm > HOJE); });
     const modelos = S.modelosComunicado.slice().sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
     return '<div class="topo"><h1>Comunicados</h1></div>' +
       '<p class="muted">Escreva um aviso e dispare para todos os alunos de uma ou mais turmas (ou de todas) por WhatsApp, acompanhando quem já recebeu.</p>' +
@@ -1294,9 +1350,12 @@
         return '<label class="check"><input type="checkbox" data-act="com-turma-toggle" data-id="' + t.id + '"' + (turmaIds.indexOf(t.id) > -1 ? ' checked' : '') + '> ' + esc(t.turma) + ' · ' + esc(t.semestre) + '</label>';
       }).join('') + '</div></div>' +
       '<div class="campo"><label>Mensagem</label><textarea data-act="com-mensagem" rows="3" placeholder="Escreva o comunicado…">' + esc(nc.mensagem) + '</textarea></div>' +
+      '<div class="campo"><label>Agendar envio para (opcional)</label><input type="date" data-act="com-disponivel-em" value="' + esc(nc.disponivelEm || '') + '" min="' + esc(HOJE) + '"></div>' +
+      '<p class="muted">Deixe em branco pra poder enviar já. Se agendar, a lista de envio só libera os botões a partir da data escolhida — bom pra deixar o texto pronto sem correr o risco de disparar antes da hora.</p>' +
       '<button class="btn on" type="button" data-act="gerar-comunicado">Gerar lista de envio</button>' +
       '</section>' +
-      (lista.length ? lista.map(linhaComunicado).join('') : '<p class="muted">Nenhum comunicado disparado ainda.</p>');
+      (agendados.length ? ('<h2 class="subtitulo">Agendados (' + agendados.length + ')</h2>' + agendados.map(linhaComunicado).join('')) : '') +
+      (disponiveis.length ? ('<h2 class="subtitulo">Disponíveis pra enviar (' + disponiveis.length + ')</h2>' + disponiveis.map(linhaComunicado).join('')) : (!agendados.length ? '<p class="muted">Nenhum comunicado disparado ainda.</p>' : ''));
   }
 
   /* ---------- Professores ---------- */
@@ -1338,19 +1397,9 @@
           '<div class="campo"><label>Valor da hora-aula (R$)</label><input type="text" inputmode="decimal" data-act="valor-hora-professor" data-i="' + i + '" value="' + esc(p.valorHoraAula || '') + '" placeholder="Ex.: 35.00"></div>' +
           '<div class="ct-acoes">' +
           (p.telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(p.telefone, 'Olá, ' + p.nome.split(' ')[0] + '! Aqui é da Washington Ilha.') + '">Chamar no WhatsApp</a>') : '') +
+          (ocorrencias.length ? ('<div class="ct-linha muted">' + ocorrencias.length + ' ocorrência(s) recente(s) · <button class="link" type="button" data-act="ir-view" data-view="ocorrencias">ver em Ocorrências</button></div>') : '') +
           '<button class="btn sm" type="button" data-act="excluir-professor" data-i="' + i + '">Excluir professor</button>' +
           '</div>' +
-          '<h4>Faltas, reposições e substituições</h4>' +
-          '<div class="campos-matricula">' +
-          '<select id="oc-tipo-' + i + '"><option value="falta">Falta</option><option value="reposicao">Reposição</option><option value="substituicao">Substituição</option></select>' +
-          '<input type="date" id="oc-data-' + i + '" value="' + HOJE + '">' +
-          '<input type="text" id="oc-obs-' + i + '" placeholder="Observação (opcional, ex.: turma, motivo…)">' +
-          '</div>' +
-          '<button class="btn sm" type="button" data-act="add-ocorrencia-professor" data-prof="' + esc(p.nome) + '" data-i="' + i + '">Registrar</button>' +
-          (ocorrencias.length ? ('<ul class="lista-alunos">' + ocorrencias.map(function (o) {
-            return '<li class="aluno-turma-linha"><div><b>' + esc(tipoOcorrenciaLabel(o.tipo)) + '</b> · ' + esc(L.fmtCurta(o.data)) + (o.obs ? (' · ' + esc(o.obs)) : '') + '</div>' +
-              '<div class="aluno-turma-acoes"><button class="btn sm" type="button" data-act="excluir-ocorrencia-professor" data-id="' + o.id + '">Excluir</button></div></li>';
-          }).join('') + '</ul>') : '<p class="muted">Nenhuma ocorrência registrada.</p>') +
           '<h4>Horas-aula por semana</h4>' +
           '<p class="muted">Total lançado em ' + esc(nomeMes(mesAtual)) + ': <b>' + totalMes.toLocaleString('pt-BR') + 'h</b>' +
           (p.valorHoraAula ? (' · a pagar: <b>' + esc(fmtReais(totalMes * Number(normalizarValorMoeda(p.valorHoraAula)))) + '</b>') : '') + '</p>' +
@@ -1365,6 +1414,38 @@
           }).join('') + '</ul>') : '<p class="muted">Nenhuma semana lançada ainda.</p>') +
           '</div>';
       }).join('') + '</div>';
+  }
+
+  /* ---------- Ocorrências de professor (faltas/reposições/substituições): aba própria, separada
+     de Professores, pra registrar e consultar tudo num lugar só. ---------- */
+  function viewOcorrencias() {
+    const no = V.novaOcorrenciaProfessor;
+    const todasOrdenadas = S.ocorrenciasProfessor.slice().sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
+    const lista = V.fProfOcorrencia ? todasOrdenadas.filter(function (o) { return L.norm(o.professor) === L.norm(V.fProfOcorrencia); }) : todasOrdenadas;
+    const profsOrdenados = S.professores.slice().sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
+    return '<div class="topo"><h1>Ocorrências de professores</h1></div>' +
+      '<p class="muted">Faltas, reposições e substituições de cada professor, tudo num lugar só.</p>' +
+      '<section class="bloco">' +
+      '<h2>Registrar ocorrência</h2>' +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Professor</label><select data-act="oc-professor"><option value="">Selecione…</option>' +
+      profsOrdenados.map(function (p) { return '<option value="' + esc(p.nome) + '"' + (no.professor === p.nome ? ' selected' : '') + '>' + esc(p.nome) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="campo"><label>Tipo</label><select data-act="oc-tipo"><option value="falta"' + (no.tipo === 'falta' ? ' selected' : '') + '>Falta</option><option value="reposicao"' + (no.tipo === 'reposicao' ? ' selected' : '') + '>Reposição</option><option value="substituicao"' + (no.tipo === 'substituicao' ? ' selected' : '') + '>Substituição</option></select></div>' +
+      '<div class="campo"><label>Data</label><input type="date" data-act="oc-data" value="' + esc(no.data) + '"></div>' +
+      '</div>' +
+      '<div class="campo"><label>Observação</label><input type="text" data-act="oc-obs" value="' + esc(no.obs) + '" placeholder="Opcional, ex.: turma, motivo…"></div>' +
+      '<button class="btn on" type="button" data-act="add-ocorrencia-professor">Registrar</button>' +
+      '</section>' +
+      '<div class="filtros">' +
+      '<select data-act="filtro-prof-ocorrencia"><option value="">Todos os professores</option>' +
+      profsOrdenados.map(function (p) { return '<option value="' + esc(p.nome) + '"' + (V.fProfOcorrencia === p.nome ? ' selected' : '') + '>' + esc(p.nome) + '</option>'; }).join('') + '</select>' +
+      '<span class="muted">' + lista.length + ' ocorrência(s)</span>' +
+      '</div>' +
+      (lista.length ? ('<table class="tabela"><thead><tr><th>Data</th><th>Professor</th><th>Tipo</th><th>Observação</th><th></th></tr></thead><tbody>' +
+        lista.map(function (o) {
+          return '<tr><td>' + esc(L.fmtCurta(o.data)) + '</td><td><b>' + esc(o.professor) + '</b></td><td>' + esc(tipoOcorrenciaLabel(o.tipo)) + '</td><td class="muted">' + esc(o.obs || '—') + '</td>' +
+            '<td><button class="btn sm" type="button" data-act="excluir-ocorrencia-professor" data-id="' + o.id + '">Excluir</button></td></tr>';
+        }).join('') + '</tbody></table>') : '<p class="muted">Nenhuma ocorrência registrada ainda.</p>');
   }
 
   /* ---------- Alunos ---------- */
@@ -1839,9 +1920,13 @@
       const sel = $('#add-aluno-turma-select');
       const aluno = sel && sel.value ? D.alunoPorId[sel.value] : null;
       if (!t || !aluno) { toast('Escolha um aluno pra adicionar.'); return; }
+      t.alunosNomes = t.alunosNomes || [];
+      if ((t.alunosNomes.length >= VAGAS_POR_TURMA) && !t.alunosNomes.some(function (n) { return L.norm(n) === L.norm(aluno.nome); })) {
+        toast('Essa turma já está com ' + VAGAS_POR_TURMA + ' alunos (nosso limite por turma). Abra outra turma ou confirme antes de adicionar mais.');
+        return;
+      }
       aluno.turmas = aluno.turmas || [];
       if (!aluno.turmas.some(function (x) { return x.turmaId === t.id; })) aluno.turmas.push({ turmaId: t.id, semestre: t.semestre, turma: t.turma });
-      t.alunosNomes = t.alunosNomes || [];
       if (!t.alunosNomes.some(function (n) { return L.norm(n) === L.norm(aluno.nome); })) t.alunosNomes.push(aluno.nome);
       LS.set('alunos', S.alunos); LS.set('turmas', S.turmas);
       registrar('Incluiu aluno na turma', aluno.nome + ' em ' + t.turma);
@@ -1939,7 +2024,7 @@
       const nome = (np.nome || '').trim();
       if (!nome) { toast('Informe o nome do professor.'); return; }
       if (S.professores.some(function (p) { return L.norm(p.nome) === L.norm(nome); })) { toast('Já existe um professor com esse nome.'); return; }
-      S.professores.push({ nome: nome, telefone: (np.telefone || '').trim() });
+      S.professores.push({ nome: nome, telefone: (np.telefone || '').trim(), valorHoraAula: VALOR_HORA_AULA_PADRAO });
       LS.set('professores', S.professores);
       registrar('Incluiu professor', nome);
       V.novoProfessor = { nome: '', telefone: '' };
@@ -1959,16 +2044,21 @@
       toast('Professor excluído.');
       render();
     },
-    'add-ocorrencia-professor': function (el) {
-      const i = el.dataset.i;
-      const tipo = $('#oc-tipo-' + i).value;
-      const data = $('#oc-data-' + i).value;
-      const obs = $('#oc-obs-' + i).value;
-      if (!data) { toast('Escolha a data.'); return; }
-      const oc = { id: proxId('oc', S.ocorrenciasProfessor), professor: el.dataset.prof, tipo: tipo, data: data, obs: (obs || '').trim(), criadoEm: new Date().toISOString() };
+    /* ---- Ocorrências de professor (faltas/reposições/substituições), aba própria ---- */
+    'oc-professor': function (el) { V.novaOcorrenciaProfessor.professor = el.value; },
+    'oc-tipo': function (el) { V.novaOcorrenciaProfessor.tipo = el.value; },
+    'oc-data': function (el) { V.novaOcorrenciaProfessor.data = el.value; },
+    'oc-obs': function (el) { V.novaOcorrenciaProfessor.obs = el.value; },
+    'filtro-prof-ocorrencia': function (el) { V.fProfOcorrencia = el.value; render(); },
+    'add-ocorrencia-professor': function () {
+      const no = V.novaOcorrenciaProfessor;
+      if (!no.professor) { toast('Escolha o professor.'); return; }
+      if (!no.data) { toast('Escolha a data.'); return; }
+      const oc = { id: proxId('oc', S.ocorrenciasProfessor), professor: no.professor, tipo: no.tipo, data: no.data, obs: (no.obs || '').trim(), criadoEm: new Date().toISOString() };
       S.ocorrenciasProfessor.push(oc);
       LS.set('ocorrenciasProfessor', S.ocorrenciasProfessor);
-      registrar('Registrou ' + tipoOcorrenciaLabel(tipo).toLowerCase() + ' de professor', el.dataset.prof + ' · ' + data);
+      registrar('Registrou ' + tipoOcorrenciaLabel(no.tipo).toLowerCase() + ' de professor', no.professor + ' · ' + no.data);
+      V.novaOcorrenciaProfessor = { professor: no.professor, tipo: 'falta', data: no.data, obs: '' };
       toast('Ocorrência registrada.');
       render();
     },
@@ -2252,6 +2342,11 @@
       const t = D.turmaPorId[nm.turmaId];
       if (!t) { toast('Escolha a turma.'); return; }
       if (!nm.dataInicio) { toast('Escolha a data de início.'); return; }
+      const alunoJaNaTurma = nm.alunoId && (t.alunosNomes || []).some(function (n) { const a = D.alunoPorId[nm.alunoId]; return a && L.norm(n) === L.norm(a.nome); });
+      if (!alunoJaNaTurma && (t.alunosNomes || []).length >= VAGAS_POR_TURMA) {
+        toast('Essa turma já está com ' + VAGAS_POR_TURMA + ' alunos (nosso limite por turma). Escolha outra turma ou confirme antes de matricular mais.');
+        return;
+      }
       let aluno = nm.alunoId ? D.alunoPorId[nm.alunoId] : null;
       if (!aluno) {
         const nome = (nm.alunoNome || '').trim();
@@ -2306,6 +2401,27 @@
       if (m) { m.livro = el.value; LS.set('matriculas', S.matriculas); }
     },
     'editar-matricula': function (el) { dlgEditarMatricula(el.dataset.id); },
+    /* Renovar: copia os dados da matrícula atual (aluno, turma, valores, livro, forma de
+       pagamento) pro formulário de "Registrar nova matrícula", já com a próxima data de início
+       sugerida (o dia seguinte ao fim do contrato atual, ou hoje, se já venceu) — Isa só confere
+       e clica em Registrar, sem redigitar nada. */
+    'renovar-matricula': function (el) {
+      const m = D.matriculaPorId[el.dataset.id];
+      if (!m) return;
+      const aluno = D.alunoPorId[m.alunoId];
+      const sugestaoInicio = m.contratoFim && m.contratoFim > HOJE ? L.somaDias(m.contratoFim, 1) : HOJE;
+      V.novaMatricula = Object.assign({}, V.novaMatricula, {
+        alunoId: m.alunoId || '', alunoNome: m.alunoNome || '', turmaId: m.turmaId || '',
+        dataInicio: sugestaoInicio, dataPagamento: '', formaPagamento: m.formaPagamento || 'asaas',
+        valorMensalidade: m.valorMensalidade || '', valorMaterial: '', livro: m.livro || '',
+        descontoTem: false, descontoValor: '', descontoObs: '',
+        rg: aluno ? (aluno.rg || '') : '', cpf: aluno ? (aluno.cpf || '') : '', dataNascimento: aluno ? (aluno.dataNascimento || '') : '',
+        endereco: aluno ? (aluno.endereco || '') : '', cep: aluno ? (aluno.cep || '') : '', diaVencimento: aluno ? (aluno.diaVencimento || '') : '',
+      });
+      V.view = 'matriculas';
+      toast('Dados da matrícula de ' + (m.alunoNome || 'aluno') + ' copiados — confira e registre a renovação.');
+      render();
+    },
     'salvar-matricula': function (el) {
       const m = D.matriculaPorId[el.dataset.id];
       if (!m) return;
@@ -2314,6 +2430,10 @@
       const dataInicio = $('#em-data').value;
       if (!novaTurma || !dataInicio) { toast('Escolha a turma e a data de início.'); return; }
       const turmaMudou = novaTurmaId !== m.turmaId;
+      if (turmaMudou && !(novaTurma.alunosNomes || []).some(function (n) { return L.norm(n) === L.norm(m.alunoNome); }) && (novaTurma.alunosNomes || []).length >= VAGAS_POR_TURMA) {
+        toast('Essa turma já está com ' + VAGAS_POR_TURMA + ' alunos (nosso limite por turma). Escolha outra turma.');
+        return;
+      }
       if (turmaMudou) {
         const aluno = D.alunoPorId[m.alunoId];
         const turmaAntiga = D.turmaPorId[m.turmaId];
@@ -2440,6 +2560,26 @@
     },
     /* ---- Inadimplência ---- */
     'valor-aberto-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.pagamento.valorEmAberto = normalizarValorMoeda(el.value); LS.set('alunos', S.alunos); } },
+    /* Pagamento parcial: registra o valor recebido no histórico (sem apagar nada) e abate do
+       "valor em aberto" — se zerar, marca a situação como "em dia" automaticamente. */
+    'add-pagamento-aluno': function (el) {
+      const a = D.alunoPorId[el.dataset.id];
+      if (!a) return;
+      const valorEl = document.getElementById('pg-valor-' + a.id);
+      const obsEl = document.getElementById('pg-obs-' + a.id);
+      const valor = Number(normalizarValorMoeda(valorEl ? valorEl.value : ''));
+      if (!valor || valor <= 0) { toast('Informe o valor pago.'); return; }
+      a.pagamento.pagamentos = a.pagamento.pagamentos || [];
+      a.pagamento.pagamentos.push({ data: HOJE, valor: String(valor), obs: (obsEl ? obsEl.value.trim() : '') });
+      const abertoAtual = Number(normalizarValorMoeda(a.pagamento.valorEmAberto)) || 0;
+      const novoAberto = Math.max(0, abertoAtual - valor);
+      a.pagamento.valorEmAberto = novoAberto ? novoAberto.toFixed(2) : '';
+      if (novoAberto <= 0) { a.pagamento.status = 'em dia'; a.pagamento.atualizadoEm = new Date().toISOString(); }
+      LS.set('alunos', S.alunos);
+      registrar('Registrou pagamento', a.nome + ' → ' + fmtReais(valor));
+      toast('Pagamento de ' + fmtReais(valor) + ' registrado.');
+      render();
+    },
     'cobranca-etapa': function (el) {
       const a = D.alunoPorId[el.dataset.id];
       if (!a) return;
@@ -2654,15 +2794,18 @@
       else if (!el.checked && i > -1) nc.turmaIds.splice(i, 1);
     },
     'com-mensagem': function (el) { V.novoComunicado.mensagem = el.value; },
+    'com-disponivel-em': function (el) { V.novoComunicado.disponivelEm = el.value; },
     'gerar-comunicado': function () {
       const nc = V.novoComunicado;
       if (!nc.mensagem.trim()) { toast('Escreva a mensagem do comunicado.'); return; }
       const turmaIds = nc.turmaIds || [];
-      const c = { id: proxId('com', S.comunicados), data: HOJE, turmaIds: turmaIds, mensagem: nc.mensagem.trim(), enviados: {}, criadoEm: new Date().toISOString() };
+      const disponivelEm = nc.disponivelEm && nc.disponivelEm > HOJE ? nc.disponivelEm : '';
+      const c = { id: proxId('com', S.comunicados), data: HOJE, turmaIds: turmaIds, mensagem: nc.mensagem.trim(), enviados: {}, criadoEm: new Date().toISOString(), disponivelEm: disponivelEm };
       S.comunicados.push(c);
       LS.set('comunicados', S.comunicados);
-      registrar('Criou comunicado', (turmaIds.length ? turmaIds.map(function (id) { return (D.turmaPorId[id] || {}).turma; }).join(', ') : 'todos') + ' · ' + c.mensagem.slice(0, 60));
-      V.novoComunicado = { mensagem: '', turmaIds: [] };
+      registrar('Criou comunicado', (turmaIds.length ? turmaIds.map(function (id) { return (D.turmaPorId[id] || {}).turma; }).join(', ') : 'todos') + ' · ' + c.mensagem.slice(0, 60) + (disponivelEm ? (' · agendado para ' + disponivelEm) : ''));
+      V.novoComunicado = { mensagem: '', turmaIds: [], disponivelEm: '' };
+      toast(disponivelEm ? ('Comunicado agendado — fica disponível pra enviar a partir de ' + L.fmtCurta(disponivelEm) + '.') : 'Lista de envio gerada.');
       render();
     },
     'comunicado-marcar-enviado': function (el) {
@@ -2781,6 +2924,7 @@
       if (dados[k] !== undefined) {
         S[k] = dados[k];
         if (k === 'alunos') normalizarAlunos(S.alunos);
+        if (k === 'professores') normalizarValorHoraAulaProfessores();
         LS.setLocal(k, S[k]);
         mudou = true;
       }
