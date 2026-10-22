@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Ponto · Washington Ilha</title>
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#0a2f4b">
+<link rel="icon" href="favicon.svg" type="image/svg+xml">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Atkinson+Hyperlegible:wght@400;700&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #eef2f6; --card: #fff; --ink: #122333; --ink-2: #4a5d70; --line: #d6dee7;
+  --rail: #0a2f4b; --ok: #1f7a4d; --ok-soft: #e3f3ea; --erro: #b3261e; --erro-soft: #fbe9e7;
+  --sai: #a14a00; --sai-soft: #fdeedd;
+  --font-display: 'Bricolage Grotesque', system-ui, sans-serif; --font: 'Atkinson Hyperlegible', system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; background: var(--bg); color: var(--ink); font: 400 1.05rem/1.45 var(--font); }
+body { min-height: 100vh; min-height: 100dvh; display: flex; flex-direction: column; }
+header { background: var(--rail); color: #fff; padding: 1rem 1.2rem calc(1rem + env(safe-area-inset-top, 0)) ; padding-top: calc(1rem + env(safe-area-inset-top, 0)); }
+header b { display: block; font: 800 1.3rem/1.1 var(--font-display); }
+header span { opacity: .75; font-size: .9rem; }
+#relogio { float: right; font: 800 1.6rem/1 var(--font-display); font-variant-numeric: tabular-nums; margin-top: .1rem; }
+main { flex: 1; width: 100%; max-width: 32rem; margin: 0 auto; padding: 1.2rem 1rem 2rem; }
+h1 { font: 800 1.45rem/1.2 var(--font-display); margin: .2rem 0 1rem; }
+.muted { color: var(--ink-2); }
+.grade { display: grid; grid-template-columns: repeat(2, 1fr); gap: .6rem; }
+.op { appearance: none; border: 1px solid var(--line); background: var(--card); color: var(--ink); border-radius: 14px;
+  padding: 1rem .8rem; font: 700 1.05rem/1.2 var(--font); text-align: left; min-height: 3.6rem; cursor: pointer; }
+.op small { display: block; font-weight: 400; color: var(--ink-2); font-size: .85rem; margin-top: .2rem; }
+.op:active { transform: scale(.98); }
+.op.sel { border-color: var(--rail); box-shadow: 0 0 0 2px var(--rail) inset; }
+.pin-pontos { display: flex; gap: .8rem; justify-content: center; margin: 1rem 0 1.4rem; }
+.pin-pontos i { width: 1rem; height: 1rem; border-radius: 50%; border: 2px solid var(--rail); }
+.pin-pontos i.on { background: var(--rail); }
+.teclado { display: grid; grid-template-columns: repeat(3, 1fr); gap: .6rem; max-width: 20rem; margin: 0 auto; }
+.teclado button { appearance: none; border: 1px solid var(--line); background: var(--card); border-radius: 14px; font: 700 1.6rem/1 var(--font-display); padding: 1rem 0; color: var(--ink); cursor: pointer; }
+.teclado button:active { background: #e4ebf2; }
+.teclado .fraco { font: 700 .95rem/1 var(--font); color: var(--ink-2); }
+.acoes { display: grid; grid-template-columns: 1fr 1fr; gap: .7rem; margin-top: 1.2rem; }
+.grande { appearance: none; border: 0; border-radius: 16px; padding: 1.3rem .8rem; font: 800 1.35rem/1 var(--font-display); color: #fff; cursor: pointer; }
+.grande.entrada { background: var(--ok); }
+.grande.saida { background: var(--sai); }
+.grande[disabled] { opacity: .5; }
+.grande.sugerido { outline: 4px solid rgba(10,47,75,.25); outline-offset: 2px; }
+.voltar { appearance: none; background: none; border: 0; color: var(--rail); font: 700 1rem var(--font); padding: .4rem 0; margin-bottom: .4rem; cursor: pointer; }
+select, input[type=text] { width: 100%; font: 400 1rem var(--font); padding: .75rem .8rem; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--ink); }
+label { display: block; font-weight: 700; margin: 1rem 0 .35rem; }
+.erro { background: var(--erro-soft); color: var(--erro); padding: .8rem 1rem; border-radius: 12px; margin: 0 0 1rem; font-weight: 700; }
+.feito { text-align: center; padding-top: 1.5rem; }
+.feito .selo { width: 5.5rem; height: 5.5rem; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 1rem; font: 800 2.6rem/1 var(--font-display); color: #fff; }
+.feito .hora { font: 800 3rem/1 var(--font-display); font-variant-numeric: tabular-nums; margin: .4rem 0; }
+.carregando { text-align: center; padding-top: 3rem; }
+</style>
+</head>
+<body>
+<header><span id="relogio"></span><b>Ponto dos professores</b><span>Washington Ilha</span></header>
+<main id="app"><div class="carregando muted">Carregando…</div></main>
+<script src="sync-config.js"></script>
+<script>
+(function () {
+  'use strict';
+  var CONFIG = window.FIREBASE_CONFIG || null;
+  var VERSAO = '10.14.1';
+  var app = document.getElementById('app');
+  var esc = function (s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); };
+  var pad = function (n) { return (n < 10 ? '0' : '') + n; };
+  var hora = function (d) { return pad(d.getHours()) + ':' + pad(d.getMinutes()); };
+  var hojeISO = function () { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); };
+  var LSK = 'washington.ponto.ultimo';
+  function lerUltimo() { try { return JSON.parse(localStorage.getItem(LSK) || 'null'); } catch (e) { return null; } }
+  function gravarUltimo(o) { try { localStorage.setItem(LSK, JSON.stringify(o)); } catch (e) { /* ignora */ } }
+
+  (function relogio() { document.getElementById('relogio').textContent = hora(new Date()); setTimeout(relogio, 5000); })();
+
+  // Estado da tela
+  var E = { cfg: null, prof: null, pin: '', turma: null, outra: false, outraTexto: '', erro: '', enviando: false, feito: null };
+  var timerVolta = null;
+
+  function carregarScript(src) {
+    return new Promise(function (ok, falha) { var s = document.createElement('script'); s.src = src; s.onload = ok; s.onerror = function () { falha(new Error(src)); }; document.head.appendChild(s); });
+  }
+  function firebasePronto() {
+    return Promise.resolve()
+      .then(function () { return typeof firebase === 'undefined' ? carregarScript('https://www.gstatic.com/firebasejs/' + VERSAO + '/firebase-app-compat.js') : null; })
+      .then(function () { return (typeof firebase === 'undefined' || !firebase.firestore) ? carregarScript('https://www.gstatic.com/firebasejs/' + VERSAO + '/firebase-firestore-compat.js') : null; })
+      .then(function () { if (!firebase.apps.length) firebase.initializeApp(CONFIG); return firebase.firestore(); });
+  }
+
+  function telaErroGeral(msg) { app.innerHTML = '<p class="erro">' + esc(msg) + '</p><button class="op" data-a="recarregar">Tentar de novo</button>'; }
+
+  function render() {
+    clearTimeout(timerVolta);
+    if (!E.cfg) return;
+    if (E.feito) return renderFeito();
+    if (!E.prof) return renderNomes();
+    if (E.pin.length < 4) return renderPin();
+    return renderTurma();
+  }
+
+  function renderNomes() {
+    var ult = lerUltimo();
+    var profs = (E.cfg.professores || []).slice();
+    if (ult) profs.sort(function (a, b) { return (b.id === ult.profId) - (a.id === ult.profId); });
+    app.innerHTML = '<h1>Quem é você?</h1>' +
+      (profs.length ? '<div class="grade">' + profs.map(function (p) {
+        return '<button class="op" data-a="prof" data-id="' + esc(p.id) + '">' + esc(p.nome.split(' ')[0]) + '<small>' + esc(p.nome.split(' ').slice(1).join(' ')) + '</small></button>';
+      }).join('') + '</div>' : '<p class="muted">Nenhum professor cadastrado ainda. Fale com a coordenação.</p>');
+  }
+
+  function renderPin() {
+    var pontos = ''; for (var i = 0; i < 4; i++) pontos += '<i class="' + (i < E.pin.length ? 'on' : '') + '"></i>';
+    var teclas = ['1', '2', '3', '4', '5', '6', '7', '8', '9', 'voltar', '0', 'apagar'];
+    app.innerHTML = '<button class="voltar" data-a="trocar-nome">← Não sou ' + esc(E.prof.nome.split(' ')[0]) + '</button>' +
+      (E.erro ? '<p class="erro">' + esc(E.erro) + '</p>' : '') +
+      '<h1>Olá, ' + esc(E.prof.nome.split(' ')[0]) + '! Digite seu PIN</h1>' +
+      '<div class="pin-pontos" aria-label="' + E.pin.length + ' de 4 números digitados">' + pontos + '</div>' +
+      '<div class="teclado">' + teclas.map(function (t) {
+        if (t === 'voltar') return '<button class="fraco" data-a="trocar-nome">Sair</button>';
+        if (t === 'apagar') return '<button class="fraco" data-a="apagar" aria-label="Apagar">⌫</button>';
+        return '<button data-a="digito" data-d="' + t + '">' + t + '</button>';
+      }).join('') + '</div>';
+  }
+
+  function sugestao() {
+    var ult = lerUltimo();
+    if (ult && ult.profId === E.prof.id && ult.dia === hojeISO() && ult.tipo === 'entrada') return { tipo: 'saida', turmaId: ult.turmaId, turma: ult.turma };
+    return { tipo: 'entrada' };
+  }
+
+  function renderTurma() {
+    var sug = sugestao();
+    if (!E.turma && !E.outra && sug.tipo === 'saida') {
+      E.turma = (E.prof.turmas || []).concat(E.cfg.todasTurmas || []).filter(function (t) { return t.id === sug.turmaId; })[0] || (sug.turma ? { id: '', nome: sug.turma } : null);
+    }
+    var turmas = E.prof.turmas || [];
+    var outras = (E.cfg.todasTurmas || []).filter(function (t) { return !turmas.some(function (m) { return m.id === t.id; }); });
+    var turmaOk = E.outra ? !!E.outraTexto.trim() : !!E.turma;
+    app.innerHTML = '<button class="voltar" data-a="trocar-nome">← Sair</button>' +
+      (E.erro ? '<p class="erro">' + esc(E.erro) + '</p>' : '') +
+      '<h1>Qual turma, ' + esc(E.prof.nome.split(' ')[0]) + '?</h1>' +
+      '<div class="grade">' + turmas.map(function (t) {
+        var sel = !E.outra && E.turma && E.turma.id === t.id;
+        return '<button class="op' + (sel ? ' sel' : '') + '" data-a="turma" data-id="' + esc(t.id) + '">' + esc(t.nome) + '<small>' + esc(t.quando || '') + '</small></button>';
+      }).join('') +
+      '<button class="op' + (E.outra ? ' sel' : '') + '" data-a="outra">Outra turma<small>substituição, reposição…</small></button></div>' +
+      (E.outra ? (
+        (outras.length ? '<label for="sel-outra">Escolha a turma</label><select id="sel-outra" data-a="sel-outra"><option value="">Selecione…</option>' + outras.map(function (t) {
+          return '<option value="' + esc(t.nome + (t.quando ? ' · ' + t.quando : '')) + '" data-id="' + esc(t.id) + '"' + (E.outraTexto === t.nome + (t.quando ? ' · ' + t.quando : '') ? ' selected' : '') + '>' + esc(t.nome) + (t.quando ? ' · ' + esc(t.quando) : '') + (t.professor ? ' (' + esc(t.professor.split(' ')[0]) + ')' : '') + '</option>';
+        }).join('') + '</select>' : '') +
+        '<label for="txt-outra">' + (outras.length ? 'Ou escreva' : 'Escreva a turma') + '</label><input type="text" id="txt-outra" data-a="txt-outra" placeholder="Ex.: Reposição Prime 2" value="' + esc(E.outraTexto) + '">'
+      ) : '') +
+      '<div class="acoes">' +
+      '<button class="grande entrada' + (sug.tipo === 'entrada' ? ' sugerido' : '') + '" data-a="bater" data-t="entrada"' + (!turmaOk || E.enviando ? ' disabled' : '') + '>Entrada</button>' +
+      '<button class="grande saida' + (sug.tipo === 'saida' ? ' sugerido' : '') + '" data-a="bater" data-t="saida"' + (!turmaOk || E.enviando ? ' disabled' : '') + '>Saída</button>' +
+      '</div>' +
+      (E.enviando ? '<p class="muted" style="text-align:center">Registrando…</p>' : '<p class="muted" style="text-align:center">O horário é registrado pelo servidor na hora do toque.</p>');
+  }
+
+  function renderFeito() {
+    var f = E.feito;
+    app.innerHTML = '<div class="feito"><div class="selo" style="background:' + (f.tipo === 'entrada' ? 'var(--ok)' : 'var(--sai)') + '">✓</div>' +
+      '<h1>' + (f.tipo === 'entrada' ? 'Entrada registrada' : 'Saída registrada') + '</h1>' +
+      '<div class="hora">' + esc(f.hora) + '</div>' +
+      '<p class="muted">' + esc(f.nome) + ' · ' + esc(f.turma) + '</p>' +
+      '<button class="op" style="width:100%;text-align:center;margin-top:1.5rem" data-a="inicio">Pronto</button></div>';
+    timerVolta = setTimeout(function () { reiniciar(); }, 15000);
+  }
+
+  function reiniciar() { E.prof = null; E.pin = ''; E.turma = null; E.outra = false; E.outraTexto = ''; E.erro = ''; E.enviando = false; E.feito = null; render(); }
+
+  function bater(tipo) {
+    if (E.enviando) return;
+    var turmaNome = E.outra ? E.outraTexto.trim() : (E.turma.nome + (E.turma.quando ? ' · ' + E.turma.quando : ''));
+    var turmaId = E.outra ? (E.outraId || '') : (E.turma.id || '');
+    if (!turmaNome) return;
+    E.enviando = true; E.erro = ''; render();
+    var concluiu = false;
+    var limite = setTimeout(function () {
+      if (concluiu) return;
+      E.enviando = false;
+      E.erro = 'A internet está lenta e o registro não confirmou. Espere um pouco antes de tentar de novo — se aparecer em dobro, a coordenação apaga.';
+      render();
+    }, 20000);
+    firebasePronto().then(function (db) {
+      return db.collection('ponto').add({
+        profId: E.prof.id, profNome: E.prof.nome, turma: turmaNome, turmaId: turmaId, tipo: tipo, pin: E.pin,
+        em: firebase.firestore.FieldValue.serverTimestamp(),
+      });
+    }).then(function () {
+      concluiu = true; clearTimeout(limite);
+      var agora = new Date();
+      gravarUltimo({ profId: E.prof.id, tipo: tipo, turmaId: turmaId, turma: turmaNome, dia: hojeISO() });
+      E.enviando = false;
+      E.feito = { tipo: tipo, hora: hora(agora), nome: E.prof.nome, turma: turmaNome };
+      render();
+    }).catch(function (err) {
+      concluiu = true; clearTimeout(limite);
+      E.enviando = false;
+      if (err && err.code === 'permission-denied') {
+        E.pin = ''; E.erro = 'PIN incorreto. Tente de novo ou fale com a coordenação.';
+      } else {
+        E.erro = 'Não consegui registrar agora. Confira a internet e tente de novo.';
+      }
+      render();
+    });
+  }
+
+  app.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-a]');
+    if (!b || b.tagName === 'SELECT' || b.tagName === 'INPUT') return;
+    var a = b.dataset.a;
+    if (a === 'recarregar') { location.reload(); return; }
+    if (a === 'prof') { E.prof = (E.cfg.professores || []).filter(function (p) { return p.id === b.dataset.id; })[0] || null; E.pin = ''; E.erro = ''; render(); return; }
+    if (a === 'trocar-nome' || a === 'inicio') { reiniciar(); return; }
+    if (a === 'digito') { if (E.pin.length < 4) { E.pin += b.dataset.d; E.erro = ''; } render(); return; }
+    if (a === 'apagar') { E.pin = E.pin.slice(0, -1); render(); return; }
+    if (a === 'turma') { E.outra = false; E.turma = (E.prof.turmas || []).filter(function (t) { return t.id === b.dataset.id; })[0] || null; render(); return; }
+    if (a === 'outra') { E.outra = true; E.turma = null; render(); return; }
+    if (a === 'bater') { bater(b.dataset.t); return; }
+  });
+  app.addEventListener('change', function (e) {
+    if (e.target.dataset.a === 'sel-outra') {
+      var opt = e.target.selectedOptions[0];
+      E.outraTexto = e.target.value; E.outraId = opt ? (opt.dataset.id || '') : '';
+      render();
+    }
+  });
+  app.addEventListener('input', function (e) {
+    if (e.target.dataset.a === 'txt-outra') {
+      E.outraTexto = e.target.value; E.outraId = '';
+      var ok = !!E.outraTexto.trim();
+      Array.prototype.forEach.call(app.querySelectorAll('[data-a="bater"]'), function (x) { x.disabled = !ok || E.enviando; });
+    }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (!E.prof || E.pin.length >= 4 || E.feito) return;
+    if (/^\d$/.test(e.key)) { E.pin += e.key; E.erro = ''; render(); }
+    else if (e.key === 'Backspace') { E.pin = E.pin.slice(0, -1); render(); }
+  });
+
+  if (!CONFIG) { telaErroGeral('O ponto ainda não está ligado: falta a configuração do Firebase (sync-config.js).'); return; }
+  firebasePronto().then(function (db) { return db.collection('pontoPublico').doc('config').get(); }).then(function (snap) {
+    if (!snap.exists) { telaErroGeral('A lista de professores ainda não foi publicada. Peça para a coordenação abrir a aba Ponto no painel.'); return; }
+    E.cfg = snap.data() || {};
+    render();
+  }).catch(function () {
+    telaErroGeral('Não consegui carregar o ponto. Confira a internet e tente de novo.');
+  });
+})();
+</script>
+</body>
+</html>

@@ -451,7 +451,125 @@
     return 'desconhecido';
   }
 
+  /* ---------- Ponto digital dos professores ----------
+     Cada batida (entrada ou saída) vira um registro { id, profId, profNome, turma, turmaId, tipo,
+     em } — `em` em milissegundos. As funções abaixo juntam as batidas em aulas e somam o tempo.
+     Ficam aqui (sem depender da tela) pra poderem ser testadas sozinhas. */
+
+  /** "Luciano Sartori" -> "luciano-sartori" (identificador estável do professor no ponto). */
+  function pontoSlug(nome) {
+    return norm(nome).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+
+  /** 1672 -> "27h52"; 50 -> "0h50". */
+  function fmtHM(min) {
+    const m = Math.max(0, Math.round(Number(min) || 0));
+    return Math.floor(m / 60) + 'h' + String(m % 60).padStart(2, '0');
+  }
+
+  /** Data local AAAA-MM-DD e hora HH:MM de um instante em milissegundos. */
+  function dataLocal(ms) { return isoDeData(new Date(ms)); }
+  function horaLocal(ms) { const d = new Date(ms); return pad2Data(d.getHours()) + ':' + pad2Data(d.getMinutes()); }
+
+  /**
+   * Período de fechamento da folha de ponto: do dia (corte + 1) de um mês até o dia `corte` do
+   * mês seguinte — ex.: corte 20 → 21/09 a 20/10. `refISO` é qualquer dia dentro do período
+   * desejado; `deslocamento` anda N períodos pra frente/trás.
+   * Devolve { ini, fim } (AAAA-MM-DD, os dois inclusive) e `competencia` (AAAA-MM do início,
+   * que é o mês escrito no cabeçalho da folha — "Controle de aula setembro" = 21/09 a 20/10).
+   */
+  function periodoFechamento(refISO, diaCorte, deslocamento) {
+    const corte = Math.min(28, Math.max(1, parseInt(diaCorte, 10) || 20));
+    const p = String(refISO).split('-').map(Number);
+    let ano = p[0], mes = p[1]; // mês (1-12) em que o período COMEÇA
+    if (p[2] <= corte) { mes -= 1; if (mes < 1) { mes = 12; ano -= 1; } }
+    mes += (deslocamento || 0);
+    while (mes < 1) { mes += 12; ano -= 1; }
+    while (mes > 12) { mes -= 12; ano += 1; }
+    let anoFim = ano, mesFim = mes + 1;
+    if (mesFim > 12) { mesFim = 1; anoFim += 1; }
+    return {
+      ini: ano + '-' + pad2Data(mes) + '-' + pad2Data(corte + 1),
+      fim: anoFim + '-' + pad2Data(mesFim) + '-' + pad2Data(corte),
+      competencia: ano + '-' + pad2Data(mes),
+    };
+  }
+
+  /**
+   * Junta as batidas em aulas. Regras:
+   * - entrada abre uma aula; a próxima saída do MESMO dia fecha essa aula;
+   * - duas entradas seguidas → a primeira fica pendente ("sem saída");
+   * - saída sem entrada aberta → pendente ("sem entrada");
+   * - entrada que ficou aberta no fim: se for de hoje, é "em aula agora"; senão, "sem saída".
+   * Devolve um objeto por profId: { profId, profNome, aulas: [...], pendentes: [...], totalMin }.
+   * Cada aula: { data, entrada, saida, turma, turmaId, min }. Cada pendente: { motivo, reg }.
+   */
+  function parearPonto(registros, hojeISO) {
+    const porProf = {};
+    (registros || []).slice().sort(function (a, b) { return a.em - b.em; }).forEach(function (r) {
+      if (!r || !r.profId || !(r.em > 0)) return;
+      const g = porProf[r.profId] || (porProf[r.profId] = { profId: r.profId, profNome: r.profNome || r.profId, regs: [] });
+      if (r.profNome) g.profNome = r.profNome;
+      g.regs.push(r);
+    });
+    const out = {};
+    Object.keys(porProf).forEach(function (pid) {
+      const g = porProf[pid];
+      const aulas = [], pendentes = [], emAula = [];
+      let aberta = null;
+      function fecharPendente(motivo) { if (aberta) { pendentes.push({ motivo: motivo, reg: aberta }); aberta = null; } }
+      g.regs.forEach(function (r) {
+        if (r.tipo === 'entrada') {
+          fecharPendente('sem saída');
+          aberta = r;
+        } else if (r.tipo === 'saida') {
+          if (aberta && dataLocal(aberta.em) === dataLocal(r.em)) {
+            aulas.push({
+              data: dataLocal(aberta.em), entrada: aberta, saida: r,
+              turma: aberta.turma || r.turma || '', turmaId: aberta.turmaId || r.turmaId || '',
+              min: Math.round((r.em - aberta.em) / 60000),
+            });
+            aberta = null;
+          } else {
+            fecharPendente('sem saída');
+            pendentes.push({ motivo: 'sem entrada', reg: r });
+          }
+        }
+      });
+      if (aberta) {
+        if (hojeISO && dataLocal(aberta.em) === hojeISO) emAula.push(aberta);
+        else fecharPendente('sem saída');
+      }
+      out[pid] = {
+        profId: pid, profNome: g.profNome, aulas: aulas, pendentes: pendentes, emAula: emAula,
+        totalMin: aulas.reduce(function (s, a) { return s + a.min; }, 0),
+      };
+    });
+    return out;
+  }
+
+  /**
+   * Compara uma aula batida com o horário cadastrado da turma ("18h - 19:15h"). Devolve
+   * { atrasoMin, saidaCedoMin, extraMin } — só os valores acima da tolerância (em minutos),
+   * ou null se a turma não tiver horário reconhecível.
+   */
+  function compararComHorario(aula, horarioTxt, tolerancia) {
+    const hm = horarioMin(horarioTxt);
+    if (!hm || !aula || !aula.entrada || !aula.saida) return null;
+    const tol = tolerancia == null ? 5 : tolerancia;
+    const e = new Date(aula.entrada.em), s = new Date(aula.saida.em);
+    const eMin = e.getHours() * 60 + e.getMinutes(), sMin = s.getHours() * 60 + s.getMinutes();
+    const atraso = eMin - hm[0], cedo = hm[1] - sMin, extra = sMin - hm[1];
+    return {
+      atrasoMin: atraso > tol ? atraso : 0,
+      saidaCedoMin: cedo > tol ? cedo : 0,
+      extraMin: extra > tol ? extra : 0,
+    };
+  }
+
   return {
+    pontoSlug: pontoSlug, fmtHM: fmtHM, dataLocal: dataLocal, horaLocal: horaLocal,
+    periodoFechamento: periodoFechamento, parearPonto: parearPonto, compararComHorario: compararComHorario,
     DIAS_ORDEM: DIAS_ORDEM, DIAS_FULL: DIAS_FULL,
     norm: norm, diasDaTurma: diasDaTurma, horarioMin: horarioMin, horariosSeSobrepoem: horariosSeSobrepoem,
     gradeSemanal: gradeSemanal, conferirConflitos: conferirConflitos, juntarNatural: juntarNatural,

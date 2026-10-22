@@ -9,7 +9,7 @@
 
   /* ---------- Armazenamento local (por navegador) + sincronização opcional entre navegadores ---------- */
   const Sync = window.Sync || { configured: function () { return false; }, init: function () {}, push: function () { return Promise.resolve(false); } };
-  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados', 'modelosComunicado', 'duplicadosIgnorados', 'ocorrenciasProfessor', 'horasAula'];
+  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'despesasUnifecaf', 'pendencias', 'comunicados', 'modelosComunicado', 'duplicadosIgnorados', 'ocorrenciasProfessor', 'horasAula'];
   const LS = {
     get: function (k, def) { try { const v = localStorage.getItem('washington.' + k); return v == null ? def : JSON.parse(v); } catch (e) { return def; } },
     set: function (k, v) {
@@ -43,6 +43,7 @@
     materiais: LS.get('materiais', []),
     entradas: LS.get('entradas', []),
     despesas: LS.get('despesas', []),
+    despesasUnifecaf: LS.get('despesasUnifecaf', []),
     pendencias: LS.get('pendencias', []),
     comunicados: LS.get('comunicados', []),
     modelosComunicado: LS.get('modelosComunicado', []),
@@ -115,6 +116,7 @@
   }
   function normalizarValoresMoeda() {
     if (normalizarValoresMoedaEm(S.despesas, ['valor'])) LS.set('despesas', S.despesas);
+    if (normalizarValoresMoedaEm(S.despesasUnifecaf, ['valor'])) LS.set('despesasUnifecaf', S.despesasUnifecaf);
     if (normalizarValoresMoedaEm(S.entradas, ['valor'])) LS.set('entradas', S.entradas);
     if (normalizarValoresMoedaEm(S.matriculas, ['valorMensalidade', 'valorMaterial', 'desconto.valor'])) LS.set('matriculas', S.matriculas);
     if (normalizarValoresMoedaEm(S.alunos, ['pagamento.valorEmAberto'])) LS.set('alunos', S.alunos);
@@ -175,17 +177,46 @@
     chamadaTurmaId: '', chamadaData: HOJE, chamadaPresencas: {}, fMesFrequencia: mesDeData(HOJE),
     novoMaterial: { alunoId: '', alunoNome: '', turmaNome: '', semestre: L.semestreDeData(HOJE), pagoWashington: false, recebidoEm: '', dataEnvio: '', dataEntrega: '', entregue: false, obs: '' },
     novaEntrada: { data: HOJE, alunoId: '', alunoNome: '', valor: '', formaPagamento: 'Pix', referente: '', obs: '' },
-    novaDespesa: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false },
-    fMesEntradas: '', fMesDespesas: '',
+    novaDespesa: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false, parcelado: false, parcelas: '' },
+    novaDespesaUnifecaf: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false, parcelado: false, parcelas: '' },
+    fMesEntradas: '', fMesDespesas: '', fMesDespesasUnifecaf: '',
     novaPendencia: { texto: '', alunoId: '', turmaId: '', prazo: '' }, fPendencia: 'abertas',
     novoComunicado: { mensagem: '', turmaIds: [], disponivelEm: '' },
     novoModeloComunicado: { nome: '', texto: '' },
     novoProfessor: { nome: '', telefone: '' },
     novaOcorrenciaProfessor: { professor: '', tipo: 'falta', data: HOJE, obs: '' }, fProfOcorrencia: '',
     semProfsOcultos: {},
+    pontoDesloc: 0, pontoRegs: null, pontoErro: '', pontoPins: null, pontoPinsCarregando: false,
+    pontoManual: { profId: '', data: HOJE, entrada: '', saida: '', turma: '' },
     logado: !Sync.configured(), authEmail: '', loginEmail: '', loginSenha: '', loginErro: '', loginCarregando: false,
   };
   const D = {};
+
+  /* ---------- Notificação no navegador de novo compromisso ---------- */
+  /* Guarda quais compromissos este navegador já "viu" (os que já existiam no boot, mais os que
+     esta aba criou), pra só notificar sobre compromissos que chegaram de FORA — de outra pessoa,
+     via sincronização — e nunca notificar a própria pessoa que acabou de criar o compromisso. */
+  let idsCompromissosConhecidos = new Set(S.compromissos.map(function (c) { return c.id; }));
+  function notificacoesSuportadas() { return typeof Notification !== 'undefined'; }
+  function notificacoesAtivadas() { return notificacoesSuportadas() && Notification.permission === 'granted'; }
+  function notificarNovoCompromisso(c) {
+    if (!notificacoesAtivadas()) return;
+    try {
+      const quando = L.fmtLonga(c.data) + (c.horario ? (' às ' + c.horario) : '');
+      const corpo = (c.comQuem ? ('Com: ' + c.comQuem + ' · ') : '') + quando + (c.local ? (' · ' + c.local) : '');
+      const n = new Notification('Novo compromisso: ' + (c.titulo || 'Sem título'), { body: corpo, icon: 'favicon.ico', tag: 'washington-compromisso-' + c.id });
+      n.onclick = function () { try { window.focus(); } catch (e) { /* ignora */ } n.close(); };
+    } catch (e) { /* ignora — navegador pode bloquear notificação em segundo plano, por exemplo */ }
+  }
+  /* Compara a lista de compromissos que chegou (local ou da sincronização) com o que este
+     navegador já conhecia, e notifica só sobre os agendados que são novidade. Chamar ANTES de
+     sobrescrever S.compromissos com a lista nova. */
+  function notificarCompromissosNovos(listaNova) {
+    (listaNova || []).forEach(function (c) {
+      if (c.status === 'agendado' && !idsCompromissosConhecidos.has(c.id)) notificarNovoCompromisso(c);
+    });
+    idsCompromissosConhecidos = new Set((listaNova || []).map(function (c) { return c.id; }));
+  }
 
   function proxId(prefixo, lista) {
     let max = 0;
@@ -201,6 +232,7 @@
     D.chamadaPorChave = {}; S.frequencias.forEach(function (c) { D.chamadaPorChave[c.turmaId + '|' + c.data] = c; });
     D.conflitos = L.conferirConflitos(S.turmas);
     D.semestres = Array.from(new Set(S.turmas.map(function (t) { return t.semestre; }))).sort();
+    publicarConfigPontoSeMudou();
   }
   function persistir() { LS.set('turmas', S.turmas); recalc(); }
 
@@ -244,6 +276,7 @@
     material: '<path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/><path d="M9 7h8M9 11h5"/>',
     entradas: '<path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/><path d="M4 4l3 3M20 4l-3 3"/>',
     despesas: '<path d="M12 2v20M17 19H9.5a3.5 3.5 0 0 1 0-7h5a3.5 3.5 0 0 0 0-7H6"/>',
+    despesasUnifecaf: '<path d="M12 2v20M17 19H9.5a3.5 3.5 0 0 1 0-7h5a3.5 3.5 0 0 0 0-7H6"/>',
     pendencias: '<rect x="4" y="3" width="16" height="18" rx="2"/><path d="M8 7h8M8 11h8M8 15h5"/><path d="m8.5 19 1.5 1.5L12 18"/>',
     comunicados: '<path d="M3 11v2a2 2 0 0 0 2 2h1l3 4v-4h8a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2z"/>',
     conferencia: '<path d="M12 3l9 16H3z"/><path d="M12 10v4M12 17v.5"/>',
@@ -251,15 +284,16 @@
     dados: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
     email: '<rect x="2.5" y="4.5" width="19" height="15" rx="2.5"/><path d="m3.5 6 7.3 5.7a1.8 1.8 0 0 0 2.4 0L20.5 6"/>',
     cadeado: '<rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5"/>',
+    ponto: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     cancelados: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/><path d="m8.5 17.5 7 4M15.5 17.5l-7 4"/>'
   };
   const VIEWS = [
     { id: 'geral', nome: 'Visão geral' },
     { id: 'semana', nome: 'Semana' }, { id: 'pendencias', nome: 'Pendências' }, { id: 'turmas', nome: 'Turmas' }, { id: 'matriculas', nome: 'Matrículas' },
     { id: 'compromissos', nome: 'Compromissos' }, { id: 'frequencia', nome: 'Frequência' }, { id: 'inadimplencia', nome: 'Inadimplência' },
-    { id: 'material', nome: 'Material' }, { id: 'entradas', nome: 'Entradas' }, { id: 'despesas', nome: 'Despesas' },
+    { id: 'material', nome: 'Material' }, { id: 'entradas', nome: 'Entradas' }, { id: 'despesas', nome: 'Despesas' }, { id: 'despesasUnifecaf', nome: 'Despesas UniFECAF' },
     { id: 'alunos', nome: 'Alunos' }, { id: 'comunicados', nome: 'Comunicados' },
-    { id: 'professores', nome: 'Professores' }, { id: 'ocorrencias', nome: 'Ocorrências' }, { id: 'conferencia', nome: 'Conferência' },
+    { id: 'professores', nome: 'Professores' }, { id: 'ponto', nome: 'Ponto' }, { id: 'ocorrencias', nome: 'Ocorrências' }, { id: 'conferencia', nome: 'Conferência' },
     { id: 'buscar', nome: 'Buscar' }, { id: 'dados', nome: 'Dados' }
   ];
   function svg(id) { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICON[id] + '</svg>'; }
@@ -373,8 +407,8 @@
     app.innerHTML = ({
       geral: viewVisaoGeral,
       semana: viewSemana, pendencias: viewPendencias, turmas: viewTurmas, matriculas: viewMatriculas, compromissos: viewCompromissos,
-      frequencia: viewFrequencia, inadimplencia: viewInadimplencia, material: viewMaterial, entradas: viewEntradas, despesas: viewDespesas,
-      alunos: viewAlunos, comunicados: viewComunicados, professores: viewProfessores, ocorrencias: viewOcorrencias,
+      frequencia: viewFrequencia, inadimplencia: viewInadimplencia, material: viewMaterial, entradas: viewEntradas, despesas: viewDespesas, despesasUnifecaf: viewDespesasUnifecaf,
+      alunos: viewAlunos, comunicados: viewComunicados, professores: viewProfessores, ponto: viewPonto, ocorrencias: viewOcorrencias,
       conferencia: viewConferencia, buscar: viewBuscar, dados: viewDados
     }[V.view] || viewSemana)();
     if (!restaurarFoco(app, foco)) app.focus();
@@ -512,7 +546,7 @@
       (rematriculas.length ? ('<h2 class="subtitulo">Rematrículas vencendo (' + rematriculas.length + ')</h2>' + rematriculas.slice(0, 5).map(cardAlunoRematriculaProxima).join('') +
         (rematriculas.length > 5 ? ('<p class="muted">+ ' + (rematriculas.length - 5) + ' outra(s) — veja todas em Alunos.</p>') : '')) : '') +
       (pendAtrasadas.length ? ('<h2 class="subtitulo">Pendências atrasadas (' + pendAtrasadas.length + ')</h2>' + pendAtrasadas.map(linhaPendencia).join('')) : '') +
-      (despAtrasadas.length ? ('<h2 class="subtitulo">Despesas atrasadas (' + despAtrasadas.length + ')</h2><table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + despAtrasadas.map(linhaDespesa).join('') + '</tbody></table>') : '') +
+      (despAtrasadas.length ? ('<h2 class="subtitulo">Despesas atrasadas (' + despAtrasadas.length + ')</h2><table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + despAtrasadas.map(function (d) { return linhaDespesa(d, 'washington'); }).join('') + '</tbody></table>') : '') +
       (!inad.length && !aniversariantesSemana.length && !rematriculas.length && !pendAtrasadas.length && !despAtrasadas.length ? '<p class="muted">Nada pegando fogo agora. 🎉</p>' : '');
   }
   function viewSemana() {
@@ -891,6 +925,16 @@
     const proximos = agendados.filter(function (c) { return c.data > HOJE; });
     const encerrados = todos.filter(function (c) { return c.status !== 'agendado'; });
     return '<div class="topo"><h1>Compromissos</h1></div>' +
+      (notificacoesSuportadas() ? ('<section class="bloco">' +
+        '<h2>Notificação de novo compromisso</h2>' +
+        (notificacoesAtivadas() ?
+          ('<p class="muted">✓ Notificações ativadas neste navegador — quando alguém (de qualquer aparelho, com a sincronização ligada) agendar um compromisso, aparece um aviso aqui, enquanto esta aba estiver aberta.</p>' +
+            '<button class="btn sm" type="button" data-act="testar-notificacao-compromisso">Testar notificação</button>') :
+          (Notification.permission === 'denied' ?
+            '<p class="muted">As notificações deste navegador foram bloqueadas. Pra ativar, abra as configurações do site (ícone ao lado do endereço) e permita notificações — depois recarregue a página.</p>' :
+            ('<p class="muted">Ative pra ser avisada direto neste navegador sempre que alguém agendar um compromisso novo (precisa deixar a aba aberta e, se usar sincronização entre aparelhos, estar logada).</p>' +
+              '<button class="btn sm on" type="button" data-act="ativar-notificacoes-compromisso">Ativar notificações</button>'))) +
+        '</section>') : '') +
       '<section class="bloco">' +
       '<h2>Agendar compromisso</h2>' +
       '<div class="campos-matricula">' +
@@ -1130,6 +1174,21 @@
   /* ---------- Entradas (dinheiro recebido: mensalidades, material, matrícula...) ---------- */
   const FORMAS_PAGAMENTO = ['Pix', 'Boleto', 'Cartão de crédito', 'Cartão de débito', 'Dinheiro', 'Transferência'];
   function mesDeData(d) { return (d || '').slice(0, 7); }
+  /* Soma N meses a uma data AAAA-MM-DD (usado pra lançar as parcelas de uma compra parcelada nos
+     meses seguintes). Se o dia não existir no mês de destino (ex.: 31 de fevereiro), usa o último
+     dia daquele mês. */
+  function somarMeses(dataISO, n) {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dataISO || '');
+    if (!m) return dataISO;
+    const ano = Number(m[1]), mesZeroBased = Number(m[2]) - 1, dia = Number(m[3]);
+    const total = mesZeroBased + n;
+    const novoAno = ano + Math.floor(total / 12);
+    const novoMes = ((total % 12) + 12) % 12;
+    const ultimoDia = new Date(novoAno, novoMes + 1, 0).getDate();
+    const novoDia = Math.min(dia, ultimoDia);
+    const pad = function (x) { return String(x).padStart(2, '0'); };
+    return novoAno + '-' + pad(novoMes + 1) + '-' + pad(novoDia);
+  }
   function nomeMes(ym) {
     if (!/^\d{4}-\d{2}$/.test(ym || '')) return ym || '';
     const MESES = ['janeiro', 'fevereiro', 'março', 'abril', 'maio', 'junho', 'julho', 'agosto', 'setembro', 'outubro', 'novembro', 'dezembro'];
@@ -1146,7 +1205,7 @@
   function saldoTag(saldo) { return '<span class="tag ' + (saldo >= 0 ? 'tag-ok' : 'tag-erro') + '">saldo ' + fmtReais(saldo) + '</span>'; }
   /* Despesas marcadas como "a pagar" cuja data já passou (atrasadas) — pra alertar antes que
      passe batido, já que não tinha nenhum aviso pra despesa vencida e ainda não paga. */
-  function despesasAtrasadas() { return S.despesas.filter(function (d) { return !d.pago && d.data && d.data < HOJE; }); }
+  function despesasAtrasadas(conta) { return listaDespesasDoConta(conta).filter(function (d) { return !d.pago && d.data && d.data < HOJE; }); }
   function linhaEntrada(e) {
     return '<tr>' +
       '<td><input type="date" data-act="en-editar-data" data-id="' + e.id + '" value="' + esc(e.data || '') + '"></td>' +
@@ -1188,29 +1247,46 @@
       (lista.length ? ('<table class="tabela"><thead><tr><th>Data</th><th>Aluno</th><th>Valor</th><th>Forma</th><th>Referente a</th><th></th></tr></thead><tbody>' + lista.map(linhaEntrada).join('') + '</tbody></table>') : '<p class="muted">Nenhuma entrada registrada ainda.</p>');
   }
 
-  /* ---------- Despesas (gastos do curso) ---------- */
+  /* ---------- Despesas (gastos) ---------- */
+  /* Dois "cadernos" de despesas totalmente separados: 'washington' (gastos do curso de inglês,
+     dividido com a Camila) e 'unifecaf' (gastos do polo UniFECAF, só da Isabella) — mesma aba/
+     mesmas funções, parametrizadas por `conta`, cada um guardado numa lista própria pra não
+     misturar os dois nem confundir quem só acompanha um dos dois. */
   const CATEGORIAS_DESPESA = ['Hora Aula', 'Transporte', 'Custos Fixos', 'Limpeza/Descartáveis', 'Mercado', 'Papelaria', 'Salários', 'Equipamentos', 'Ações', 'Metas', 'Outro'];
-  function opcoesQuemPagaDespesa() {
+  function listaDespesasDoConta(conta) { return conta === 'unifecaf' ? S.despesasUnifecaf : S.despesas; }
+  function definirListaDespesasDoConta(conta, lista) { if (conta === 'unifecaf') S.despesasUnifecaf = lista; else S.despesas = lista; }
+  function chaveLSDespesas(conta) { return conta === 'unifecaf' ? 'despesasUnifecaf' : 'despesas'; }
+  function novaDespesaDoConta(conta) { return conta === 'unifecaf' ? V.novaDespesaUnifecaf : V.novaDespesa; }
+  function filtroMesDespesasKey(conta) { return conta === 'unifecaf' ? 'fMesDespesasUnifecaf' : 'fMesDespesas'; }
+  function contaDoEl(el) { return (el && el.dataset && el.dataset.conta === 'unifecaf') ? 'unifecaf' : 'washington'; }
+  function opcoesQuemPagaDespesa(conta) {
+    if (conta === 'unifecaf') {
+      const vistos = S.despesasUnifecaf.map(function (d) { return d.pagoPor; }).filter(Boolean);
+      return Array.from(new Set(['Isabella', 'Conta UniFECAF'].concat(vistos)));
+    }
     const profs = S.professores.map(function (p) { return p.nome; });
     return Array.from(new Set(['Isabella', 'Camila', 'Conta do curso'].concat(profs)));
   }
-  function linhaDespesa(d) {
+  function linhaDespesa(d, conta) {
+    const parcelaTag = d.parcelaTotal ? (' <span class="tag tag-neutro">parcela ' + d.parcelaNum + '/' + d.parcelaTotal + '</span>') : '';
     return '<tr>' +
-      '<td><input type="date" data-act="de-editar-data" data-id="' + d.id + '" value="' + esc(d.data || '') + '"></td>' +
-      '<td><b>' + esc(d.descricao) + '</b>' + (d.obs ? ('<div class="muted">' + esc(d.obs) + '</div>') : '') + '</td>' +
+      '<td><input type="date" data-act="de-editar-data" data-conta="' + conta + '" data-id="' + d.id + '" value="' + esc(d.data || '') + '"></td>' +
+      '<td><b>' + esc(d.descricao) + '</b>' + parcelaTag + (d.obs ? ('<div class="muted">' + esc(d.obs) + '</div>') : '') + '</td>' +
       '<td>' + esc(d.categoria || '—') + '</td>' +
       '<td>' + esc(fmtReais(d.valor) || '—') + '</td>' +
       '<td>' + esc(d.pagoPor || '—') + '</td>' +
-      '<td><button type="button" class="btn sm' + (d.pago ? ' on' : '') + '" data-act="despesa-toggle" data-id="' + d.id + '">' + (d.pago ? 'Pago' : 'A pagar') + '</button></td>' +
-      '<td><button type="button" class="btn sm" data-act="excluir-despesa" data-id="' + d.id + '">Excluir</button></td>' +
+      '<td><button type="button" class="btn sm' + (d.pago ? ' on' : '') + '" data-act="despesa-toggle" data-conta="' + conta + '" data-id="' + d.id + '">' + (d.pago ? 'Pago' : 'A pagar') + '</button></td>' +
+      '<td><button type="button" class="btn sm" data-act="excluir-despesa" data-conta="' + conta + '" data-id="' + d.id + '">Excluir</button>' +
+      (d.parcelamentoId ? (' <button type="button" class="btn sm" data-act="excluir-parcelas-restantes" data-conta="' + conta + '" data-grupo="' + esc(d.parcelamentoId) + '">Cancelar parcelas restantes</button>') : '') +
+      '</td>' +
       '</tr>';
   }
   /* ---------- Despesas fixas/recorrentes: a gente guarda o "modelo" como a própria despesa mais
      recente marcada como fixa (mesma descrição), e oferece lançar uma cópia dela no mês atual com
      1 clique, em vez de redigitar todo mês. Não deixa lançar 2x no mesmo mês pra não duplicar. ---------- */
-  function despesasFixasModelos() {
+  function despesasFixasModelos(conta) {
     const porDescricao = {};
-    S.despesas.filter(function (d) { return d.fixa; }).forEach(function (d) {
+    listaDespesasDoConta(conta).filter(function (d) { return d.fixa; }).forEach(function (d) {
       const chave = L.norm(d.descricao);
       if (!chave) return;
       if (!porDescricao[chave] || (d.data || '') > (porDescricao[chave].data || '')) porDescricao[chave] = d;
@@ -1218,57 +1294,64 @@
     return Object.keys(porDescricao).map(function (k) { return porDescricao[k]; })
       .sort(function (a, b) { return L.norm(a.descricao).localeCompare(L.norm(b.descricao)); });
   }
-  function despesaFixaJaLancadaNoMes(modelo, ym) {
-    return S.despesas.some(function (d) { return L.norm(d.descricao) === L.norm(modelo.descricao) && mesDeData(d.data) === ym; });
+  function despesaFixaJaLancadaNoMes(modelo, ym, conta) {
+    return listaDespesasDoConta(conta).some(function (d) { return L.norm(d.descricao) === L.norm(modelo.descricao) && mesDeData(d.data) === ym; });
   }
-  function viewDespesas() {
-    const nd = V.novaDespesa;
-    const meses = mesesDisponiveis(S.despesas);
-    const lista = (V.fMesDespesas ? S.despesas.filter(function (d) { return mesDeData(d.data) === V.fMesDespesas; }) : S.despesas.slice())
+  function viewDespesas(conta) {
+    conta = conta === 'unifecaf' ? 'unifecaf' : 'washington';
+    const nd = novaDespesaDoConta(conta);
+    const fMesKey = filtroMesDespesasKey(conta);
+    const listaCompleta = listaDespesasDoConta(conta);
+    const meses = mesesDisponiveis(listaCompleta);
+    const lista = (V[fMesKey] ? listaCompleta.filter(function (d) { return mesDeData(d.data) === V[fMesKey]; }) : listaCompleta.slice())
       .sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
     const total = lista.reduce(function (s, d) { const v = Number(normalizarValorMoeda(d.valor)); return s + (isNaN(v) ? 0 : v); }, 0);
-    const entradasMesmoPeriodo = totalLista(S.entradas, V.fMesDespesas);
+    const entradasMesmoPeriodo = conta === 'washington' ? totalLista(S.entradas, V[fMesKey]) : 0;
     const porCategoria = {};
     lista.forEach(function (d) { const v = Number(normalizarValorMoeda(d.valor)); porCategoria[d.categoria || 'Outro'] = (porCategoria[d.categoria || 'Outro'] || 0) + (isNaN(v) ? 0 : v); });
     const categoriasOrdenadas = Object.keys(porCategoria).sort(function (a, b) { return porCategoria[b] - porCategoria[a]; });
     const mesAtual = mesDeData(HOJE);
-    const modelosFixos = despesasFixasModelos();
-    const atrasadas = despesasAtrasadas();
-    return '<div class="topo"><h1>Despesas</h1><div class="topo-acoes"><button class="btn sm" type="button" data-act="exportar-despesas-csv">Baixar CSV</button></div></div>' +
+    const modelosFixos = despesasFixasModelos(conta);
+    const atrasadas = despesasAtrasadas(conta);
+    const titulo = conta === 'unifecaf' ? 'Despesas UniFECAF' : 'Despesas';
+    return '<div class="topo"><h1>' + esc(titulo) + '</h1><div class="topo-acoes"><button class="btn sm" type="button" data-act="exportar-despesas-csv" data-conta="' + conta + '">Baixar CSV</button></div></div>' +
       (atrasadas.length ? ('<section class="bloco"><h2>⚠️ Despesas atrasadas (' + atrasadas.length + ')</h2>' +
         '<p class="muted">Marcadas como "a pagar" com data já passada · total ' + fmtReais(totalLista(atrasadas)) + '</p>' +
-        '<table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + atrasadas.map(linhaDespesa).join('') + '</tbody></table>' +
+        '<table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + atrasadas.map(function (d) { return linhaDespesa(d, conta); }).join('') + '</tbody></table>' +
         '</section>') : '') +
       '<section class="bloco">' +
-      '<h2>Registrar despesa</h2>' +
+      '<h2>Registrar despesa' + (conta === 'unifecaf' ? ' (UniFECAF)' : '') + '</h2>' +
       '<div class="campos-matricula">' +
-      '<div class="campo"><label>Data</label><input type="date" data-act="de-data" value="' + esc(nd.data) + '"></div>' +
-      '<div class="campo"><label>Descrição</label><input type="text" data-act="de-descricao" value="' + esc(nd.descricao) + '" placeholder="Ex.: Aluguel, Mercado…"></div>' +
-      '<div class="campo"><label>Categoria</label><select data-act="de-categoria">' + CATEGORIAS_DESPESA.map(function (c) { return '<option value="' + esc(c) + '"' + (nd.categoria === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></div>' +
-      '<div class="campo"><label>Valor (R$)</label><input type="text" inputmode="decimal" data-act="de-valor" value="' + esc(nd.valor) + '" placeholder="Ex.: 150.00"></div>' +
-      '<div class="campo"><label>Pago por</label><input type="text" list="lista-pagopor" data-act="de-pagopor" value="' + esc(nd.pagoPor) + '" placeholder="Ex.: Isabella, Camila, Conta do curso"></div>' +
+      '<div class="campo"><label>Data</label><input type="date" data-act="de-data" data-conta="' + conta + '" value="' + esc(nd.data) + '"></div>' +
+      '<div class="campo"><label>Descrição</label><input type="text" data-act="de-descricao" data-conta="' + conta + '" value="' + esc(nd.descricao) + '" placeholder="Ex.: Aluguel, Mercado…"></div>' +
+      '<div class="campo"><label>Categoria</label><select data-act="de-categoria" data-conta="' + conta + '">' + CATEGORIAS_DESPESA.map(function (c) { return '<option value="' + esc(c) + '"' + (nd.categoria === c ? ' selected' : '') + '>' + esc(c) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="campo"><label>' + (nd.parcelado ? 'Valor de cada parcela (R$)' : 'Valor (R$)') + '</label><input type="text" inputmode="decimal" data-act="de-valor" data-conta="' + conta + '" value="' + esc(nd.valor) + '" placeholder="Ex.: 150.00"></div>' +
+      '<div class="campo"><label>Pago por</label><input type="text" list="lista-pagopor-' + conta + '" data-act="de-pagopor" data-conta="' + conta + '" value="' + esc(nd.pagoPor) + '" placeholder="' + (conta === 'unifecaf' ? 'Ex.: Isabella, Conta UniFECAF' : 'Ex.: Isabella, Camila, Conta do curso') + '"></div>' +
       '</div>' +
-      '<div class="check"><label><input type="checkbox" data-act="de-pago"' + (nd.pago ? ' checked' : '') + '> Já foi pago</label></div>' +
-      '<div class="check"><label><input type="checkbox" data-act="de-fixa"' + (nd.fixa ? ' checked' : '') + '> Despesa fixa/recorrente (repete todo mês)</label></div>' +
-      '<div class="campo"><label>Observação</label><input type="text" data-act="de-obs" value="' + esc(nd.obs) + '" placeholder="Opcional"></div>' +
-      '<datalist id="lista-pagopor">' + opcoesQuemPagaDespesa().map(function (q) { return '<option value="' + esc(q) + '">'; }).join('') + '</datalist>' +
-      '<button class="btn on" type="button" data-act="add-despesa">Registrar</button>' +
+      '<div class="check"><label><input type="checkbox" data-act="de-pago" data-conta="' + conta + '"' + (nd.pago ? ' checked' : '') + '> Já foi pago</label></div>' +
+      (nd.parcelado ? '' : ('<div class="check"><label><input type="checkbox" data-act="de-fixa" data-conta="' + conta + '"' + (nd.fixa ? ' checked' : '') + '> Despesa fixa/recorrente (repete todo mês)</label></div>')) +
+      '<div class="check"><label><input type="checkbox" data-act="de-parcelado" data-conta="' + conta + '"' + (nd.parcelado ? ' checked' : '') + '> Compra parcelada (lança 1 despesa por mês, nos meses seguintes)</label></div>' +
+      (nd.parcelado ? ('<div class="campo"><label>Número de parcelas</label><input type="number" min="2" step="1" data-act="de-parcelas" data-conta="' + conta + '" value="' + esc(nd.parcelas) + '" placeholder="Ex.: 12"></div>') : '') +
+      '<div class="campo"><label>Observação</label><input type="text" data-act="de-obs" data-conta="' + conta + '" value="' + esc(nd.obs) + '" placeholder="Opcional"></div>' +
+      '<datalist id="lista-pagopor-' + conta + '">' + opcoesQuemPagaDespesa(conta).map(function (q) { return '<option value="' + esc(q) + '">'; }).join('') + '</datalist>' +
+      '<button class="btn on" type="button" data-act="add-despesa" data-conta="' + conta + '">Registrar</button>' +
       '</section>' +
       (modelosFixos.length ? ('<section class="bloco"><h2>Despesas fixas (' + modelosFixos.length + ')</h2>' +
         '<p class="muted">Lance de novo em ' + esc(nomeMes(mesAtual)) + ' com 1 clique, sem redigitar.</p>' +
         modelosFixos.map(function (m) {
-          const jaLancada = despesaFixaJaLancadaNoMes(m, mesAtual);
+          const jaLancada = despesaFixaJaLancadaNoMes(m, mesAtual, conta);
           return '<div class="ct-linha">' + esc(m.descricao) + ' · ' + esc(m.categoria || '—') + ' · ' + esc(fmtReais(m.valor) || '—') +
-            (jaLancada ? ' <span class="tag tag-ok">Já lançada este mês</span>' : ' <button class="btn sm" type="button" data-act="lancar-despesa-fixa" data-desc="' + esc(m.descricao) + '">Lançar em ' + esc(nomeMes(mesAtual)) + '</button>') +
+            (jaLancada ? ' <span class="tag tag-ok">Já lançada este mês</span>' : ' <button class="btn sm" type="button" data-act="lancar-despesa-fixa" data-conta="' + conta + '" data-desc="' + esc(m.descricao) + '">Lançar em ' + esc(nomeMes(mesAtual)) + '</button>') +
             '</div>';
         }).join('') + '</section>') : '') +
       '<div class="filtros">' +
-      '<select data-act="filtro-mes-despesas"><option value="">Todos os meses</option>' + meses.map(function (m) { return '<option value="' + m + '"' + (V.fMesDespesas === m ? ' selected' : '') + '>' + esc(nomeMes(m)) + '</option>'; }).join('') + '</select>' +
-      '<span class="muted">' + lista.length + ' lançamento(s) · total ' + fmtReais(total) + ' · entradas no mesmo período ' + fmtReais(entradasMesmoPeriodo) + '</span> ' + saldoTag(entradasMesmoPeriodo - total) +
+      '<select data-act="filtro-mes-despesas" data-conta="' + conta + '"><option value="">Todos os meses</option>' + meses.map(function (m) { return '<option value="' + m + '"' + (V[fMesKey] === m ? ' selected' : '') + '>' + esc(nomeMes(m)) + '</option>'; }).join('') + '</select>' +
+      '<span class="muted">' + lista.length + ' lançamento(s) · total ' + fmtReais(total) + (conta === 'washington' ? (' · entradas no mesmo período ' + fmtReais(entradasMesmoPeriodo)) : '') + '</span> ' + (conta === 'washington' ? saldoTag(entradasMesmoPeriodo - total) : '') +
       '</div>' +
       (categoriasOrdenadas.length ? ('<p class="muted">' + categoriasOrdenadas.map(function (c) { return esc(c) + ': ' + fmtReais(porCategoria[c]); }).join(' · ') + '</p>') : '') +
-      (lista.length ? ('<table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + lista.map(linhaDespesa).join('') + '</tbody></table>') : '<p class="muted">Nenhuma despesa registrada ainda.</p>');
+      (lista.length ? ('<table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + lista.map(function (d) { return linhaDespesa(d, conta); }).join('') + '</tbody></table>') : '<p class="muted">Nenhuma despesa registrada ainda.</p>');
   }
+  function viewDespesasUnifecaf() { return viewDespesas('unifecaf'); }
 
   /* ---------- Pendências (nada pode passar batido) ---------- */
   function opcoesTurmaSelect(selecionada) {
@@ -1452,6 +1535,226 @@
           }).join('') + '</ul>') : '<p class="muted">Nenhum mês lançado ainda.</p>') +
           '</div>';
       }).join('') + '</div>';
+  }
+
+  /* ---------- Ponto digital dos professores ----------
+     O professor bate entrada e saída pela página ponto.html (QR code na parede), com o horário do
+     servidor — ninguém digita hora. Cada batida é um documento na coleção `ponto` do Firebase,
+     separado do estado principal. Esta aba junta as batidas em aulas, soma o período de
+     fechamento (21 a 20, como na folha de papel), mostra atrasos/saídas antes do horário da turma
+     e as pendências (esqueceu de bater), e lança o total em Professores › Horas-aula do mês. */
+  const TOLERANCIA_PONTO_MIN = 5;
+  function diaCortePonto() { const n = parseInt(S.cfg.pontoDiaCorte, 10); return n >= 1 && n <= 28 ? n : 20; }
+  function periodoPontoAtual() { return L.periodoFechamento(HOJE, diaCortePonto(), V.pontoDesloc); }
+  function msDe(dataISO, hhmm) { return new Date(dataISO + 'T' + hhmm + ':00').getTime(); }
+  function horaValida(h) { return /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(h || '').trim()); }
+  function hhmm(h) { const p = String(h).trim().split(':'); return String(p[0]).padStart(2, '0') + ':' + p[1]; }
+  function professorPorPontoId(pid) { return S.professores.find(function (p) { return L.pontoSlug(p.nome) === pid; }) || null; }
+  function turmaAtivaParaPonto(t) {
+    return t.semestre === L.semestreDeData(HOJE) && !/finaliz|conclu|n[aã]o formou/i.test(t.situacao || '');
+  }
+  function rotuloTurmaPonto(t) { return t.turma + (t.dia || t.horario ? (' · ' + [t.dia, t.horario].filter(Boolean).join(' ')) : ''); }
+  function linkPaginaPonto() {
+    try { return new URL('ponto.html', location.href.split('?')[0].split('#')[0]).href; } catch (e) { return 'ponto.html'; }
+  }
+
+  /* Lista pública que a página do ponto lê (sem login): só nomes e turmas. Republica sozinha
+     quando professores/turmas mudam, a partir de qualquer painel logado que estiver aberto. */
+  function configPublicaPonto() {
+    const ativas = S.turmas.filter(turmaAtivaParaPonto);
+    return {
+      professores: S.professores.slice().sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); }).map(function (p) {
+        let dele = ativas.filter(function (t) { return L.norm(t.professor) === L.norm(p.nome); });
+        if (!dele.length) {
+          const todas = S.turmas.filter(function (t) { return L.norm(t.professor) === L.norm(p.nome); });
+          const ultimo = todas.map(function (t) { return t.semestre; }).sort().pop();
+          dele = todas.filter(function (t) { return t.semestre === ultimo && !/finaliz|conclu|n[aã]o formou/i.test(t.situacao || ''); });
+        }
+        return { id: L.pontoSlug(p.nome), nome: p.nome, turmas: dele.map(function (t) { return { id: t.id, nome: t.turma, quando: [t.dia, t.horario].filter(Boolean).join(' ') }; }) };
+      }),
+      todasTurmas: ativas.slice().sort(function (a, b) { return L.norm(a.turma).localeCompare(L.norm(b.turma)); })
+        .map(function (t) { return { id: t.id, nome: t.turma, quando: [t.dia, t.horario].filter(Boolean).join(' '), professor: t.professor }; }),
+    };
+  }
+  var pontoConfigPublicada = '', pontoConfigT = null;
+  function publicarConfigPontoSeMudou() {
+    if (!Sync.configured() || !V.logado || !Sync.pontoPublicarConfig) return;
+    clearTimeout(pontoConfigT);
+    pontoConfigT = setTimeout(function () {
+      const cfg = configPublicaPonto();
+      const assinatura = JSON.stringify(cfg);
+      if (assinatura === pontoConfigPublicada) return;
+      Sync.pontoPublicarConfig(cfg).then(function (ok) { if (ok) pontoConfigPublicada = assinatura; });
+    }, 1500);
+  }
+
+  /* Escuta as batidas do período que está na tela; troca a escuta quando muda o período. */
+  var pontoOuvindoChave = '', pontoPararOuvir = null;
+  function garantirPontoOuvindo() {
+    if (!Sync.configured() || !V.logado || !Sync.pontoOuvir) return;
+    const per = periodoPontoAtual();
+    const chave = per.ini + '|' + per.fim;
+    if (chave === pontoOuvindoChave) return;
+    if (pontoPararOuvir) pontoPararOuvir();
+    pontoOuvindoChave = chave;
+    V.pontoRegs = null; V.pontoErro = '';
+    pontoPararOuvir = Sync.pontoOuvir(msDe(per.ini, '00:00'), msDe(L.somaDias(per.fim, 1), '00:00'), function (regs) {
+      V.pontoRegs = regs; V.pontoErro = '';
+      if (V.view === 'ponto') render();
+    }, function () {
+      V.pontoErro = 'Não consegui ler o ponto. Confira se as regras do Firebase foram atualizadas (veja o README, seção "Ponto digital").';
+      if (V.view === 'ponto') render();
+    });
+  }
+  function pontoPorProfessor() {
+    return L.parearPonto(V.pontoRegs || [], HOJE);
+  }
+
+  function linhaAulaPonto(a) {
+    const t = a.turmaId ? D.turmaPorId[a.turmaId] : null;
+    const cmp = t ? L.compararComHorario(a, t.horario, TOLERANCIA_PONTO_MIN) : null;
+    const obs = [];
+    if (cmp && cmp.atrasoMin) obs.push('<span class="tag tag-aviso">chegou ' + cmp.atrasoMin + ' min depois</span>');
+    if (cmp && cmp.saidaCedoMin) obs.push('<span class="tag tag-aviso">saiu ' + cmp.saidaCedoMin + ' min antes</span>');
+    if (cmp && cmp.extraMin) obs.push('<span class="tag tag-neutro">ficou ' + cmp.extraMin + ' min a mais</span>');
+    if (a.min > 300) obs.push('<span class="tag tag-erro">mais de 5h — conferir</span>');
+    if (a.entrada.manual || a.saida.manual) obs.push('<span class="tag tag-neutro">corrigido à mão</span>');
+    return '<tr><td>' + esc(L.fmtCurta(a.data)) + '</td><td>' + esc(a.turma || '—') + '</td>' +
+      '<td>' + esc(L.horaLocal(a.entrada.em)) + '</td><td>' + esc(L.horaLocal(a.saida.em)) + '</td>' +
+      '<td><b>' + esc(L.fmtHM(a.min)) + '</b></td><td>' + obs.join(' ') + '</td>' +
+      '<td><button class="btn sm" type="button" data-act="ponto-editar-aula" data-e="' + esc(a.entrada.id) + '" data-s="' + esc(a.saida.id) + '">Corrigir</button></td></tr>';
+  }
+  function linhaPendentePonto(pd) {
+    const r = pd.reg;
+    return '<li class="aluno-turma-linha"><div><span class="tag tag-erro">' + (pd.motivo === 'sem saída' ? 'Esqueceu a saída' : 'Esqueceu a entrada') + '</span> ' +
+      esc(L.fmtCurta(L.dataLocal(r.em))) + ' · ' + (r.tipo === 'entrada' ? 'entrada ' : 'saída ') + '<b>' + esc(L.horaLocal(r.em)) + '</b>' + (r.turma ? (' · ' + esc(r.turma)) : '') + '</div>' +
+      '<div class="aluno-turma-acoes"><button class="btn sm on" type="button" data-act="ponto-completar" data-id="' + esc(r.id) + '">Completar</button>' +
+      '<button class="btn sm" type="button" data-act="ponto-excluir-batida" data-id="' + esc(r.id) + '">Apagar batida</button></div></li>';
+  }
+
+  function viewPonto() {
+    const per = periodoPontoAtual();
+    const topo = '<div class="topo"><h1>Ponto dos professores</h1></div>';
+    if (!Sync.configured()) {
+      return topo + '<p class="muted">O ponto digital precisa da sincronização com o Firebase ligada (veja o README).</p>';
+    }
+    garantirPontoOuvindo();
+    publicarConfigPontoSeMudou();
+    const link = linkPaginaPonto();
+    const nav = '<div class="filtros">' +
+      '<button class="btn sm" type="button" data-act="ponto-periodo" data-d="-1">← Período anterior</button>' +
+      '<button class="btn sm" type="button" data-act="ponto-periodo" data-d="0">Atual</button>' +
+      '<button class="btn sm" type="button" data-act="ponto-periodo" data-d="1">Próximo →</button>' +
+      '<span class="muted">Folha de <b>' + esc(nomeMes(per.competencia)) + '</b>: ' + esc(L.fmtCurta(per.ini)) + ' a ' + esc(L.fmtCurta(per.fim)) + '</span></div>';
+    let corpo;
+    if (V.pontoErro) corpo = '<p class="login-erro">' + esc(V.pontoErro) + '</p>';
+    else if (!V.pontoRegs) corpo = '<p class="muted">Carregando as batidas…</p>';
+    else {
+      const grupos = pontoPorProfessor();
+      const ids = Object.keys(grupos).sort(function (a, b) { return L.norm(grupos[a].profNome).localeCompare(L.norm(grupos[b].profNome)); });
+      const semBatida = S.professores.filter(function (p) { return !grupos[L.pontoSlug(p.nome)]; }).map(function (p) { return p.nome; });
+      const totalPend = ids.reduce(function (s, id) { return s + grupos[id].pendentes.length; }, 0);
+      const totalAulas = ids.reduce(function (s, id) { return s + grupos[id].aulas.length; }, 0);
+      corpo = '<div class="stats-topo">' +
+        '<div class="stat-tile"><b>' + totalAulas + '</b><span>aula(s) batida(s) no período</span></div>' +
+        '<div class="stat-tile"><b>' + totalPend + '</b><span>pendência(s) pra corrigir</span></div>' +
+        '</div>' +
+        (ids.length ? '' : '<p class="muted">Nenhuma batida neste período ainda.</p>') +
+        ids.map(function (id) {
+          const g = grupos[id];
+          const prof = professorPorPontoId(id);
+          const valorHora = prof && prof.valorHoraAula ? Number(normalizarValorMoeda(prof.valorHoraAula)) : NaN;
+          const horasDec = Math.round(g.totalMin / 60 * 100) / 100;
+          const lancado = prof ? S.horasAula.find(function (h) { return L.norm(h.professor) === L.norm(prof.nome) && mesDeData(h.semana) === per.competencia; }) : null;
+          const jaLancadoIgual = lancado && Number(normalizarValorMoeda(lancado.horas)) === horasDec;
+          return '<section class="bloco">' +
+            '<div class="ct-topo"><b>' + esc(prof ? prof.nome : g.profNome) + '</b>' +
+            '<span class="tag tag-ok">' + esc(L.fmtHM(g.totalMin)) + ' · ' + g.aulas.length + ' aula(s)</span>' +
+            (!isNaN(valorHora) && g.totalMin ? ('<span class="tag tag-neutro">a pagar ' + esc(fmtReais(horasDec * valorHora)) + '</span>') : '') +
+            (g.pendentes.length ? ('<span class="tag tag-erro">' + g.pendentes.length + ' pendência(s)</span>') : '') +
+            (g.emAula.length ? '<span class="tag tag-aviso">em aula agora</span>' : '') +
+            '</div>' +
+            (g.pendentes.length ? ('<ul class="lista-alunos">' + g.pendentes.map(linhaPendentePonto).join('') + '</ul>') : '') +
+            (g.aulas.length ? ('<div style="overflow-x:auto"><table class="tabela"><thead><tr><th>Data</th><th>Turma</th><th>Entrada</th><th>Saída</th><th>Tempo</th><th>Observação</th><th></th></tr></thead><tbody>' +
+              g.aulas.slice().reverse().map(linhaAulaPonto).join('') + '</tbody></table></div>') : '') +
+            '<div class="ct-acoes">' +
+            (!g.totalMin ? '<span class="muted">Nada pra lançar ainda — complete as pendências.</span>' : prof ? ('<button class="btn sm' + (jaLancadoIgual ? ' on-ok' : ' on') + '" type="button" data-act="ponto-lancar-horas" data-prof="' + esc(prof.nome) + '" data-horas="' + horasDec + '" data-mes="' + per.competencia + '"' + (g.pendentes.length ? ' title="Ainda tem pendência — corrija antes, senão o total fica menor."' : '') + '>' +
+              (jaLancadoIgual ? ('✓ Lançado em Horas-aula de ' + esc(nomeMes(per.competencia))) : ('Lançar ' + String(horasDec).replace('.', ',') + 'h em Horas-aula de ' + esc(nomeMes(per.competencia)))) + '</button>') :
+              '<span class="muted">Esse nome não está mais em Professores — cadastre de novo pra lançar as horas.</span>') +
+            '</div>' +
+            '</section>';
+        }).join('') +
+        (semBatida.length ? ('<p class="muted">Sem nenhuma batida neste período: ' + esc(semBatida.join(', ')) + '.</p>') : '');
+    }
+    const m = V.pontoManual;
+    const profsOrd = S.professores.slice().sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
+    const manual = '<section class="bloco"><h2>Lançar aula à mão</h2>' +
+      '<p class="muted">Pra quando o professor não conseguiu bater (celular sem bateria, internet fora etc.).</p>' +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Professor</label><select data-act="pm-prof"><option value="">Selecione…</option>' + profsOrd.map(function (p) { const id = L.pontoSlug(p.nome); return '<option value="' + esc(id) + '"' + (m.profId === id ? ' selected' : '') + '>' + esc(p.nome) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="campo"><label>Data</label><input type="date" data-act="pm-data" value="' + esc(m.data) + '"></div>' +
+      '<div class="campo"><label>Entrada</label><input type="time" data-act="pm-entrada" value="' + esc(m.entrada) + '"></div>' +
+      '<div class="campo"><label>Saída</label><input type="time" data-act="pm-saida" value="' + esc(m.saida) + '"></div>' +
+      '<div class="campo"><label>Turma</label><input type="text" data-act="pm-turma" value="' + esc(m.turma) + '" placeholder="Ex.: Prime 2"></div>' +
+      '</div><button class="btn on" type="button" data-act="ponto-add-manual">Lançar aula</button></section>';
+    const pins = V.pontoPins;
+    const config = '<section class="bloco"><h2>Página do ponto e PINs</h2>' +
+      '<p class="muted">Os professores abrem este link (pelo QR code na parede), escolhem o nome, digitam o PIN, escolhem a turma e tocam em Entrada ou Saída. O horário é o do servidor.</p>' +
+      '<div class="ct-acoes"><a class="btn sm" target="_blank" rel="noopener" href="' + esc(link) + '">Abrir página do ponto</a>' +
+      '<button class="btn sm" type="button" data-act="ponto-copiar-link">Copiar link</button>' +
+      '<button class="btn sm on" type="button" data-act="ponto-imprimir-qr">Imprimir QR code</button></div>' +
+      '<div class="campos-matricula" style="margin-top:0.8rem"><div class="campo"><label>Dia do fechamento da folha</label><input type="text" inputmode="numeric" data-act="ponto-dia-corte" value="' + esc(String(diaCortePonto())) + '" placeholder="20"></div></div>' +
+      '<p class="muted">Período vai do dia seguinte ao fechamento até o dia do fechamento no mês seguinte (hoje: 21 a 20).</p>' +
+      '<h4>PIN de cada professor (4 dígitos)</h4>' +
+      (pins ? ('<div class="campos-matricula">' + profsOrd.map(function (p) {
+        const id = L.pontoSlug(p.nome);
+        return '<div class="campo"><label>' + esc(p.nome) + '</label><input type="text" inputmode="numeric" maxlength="4" data-act="ponto-pin" data-id="' + esc(id) + '" value="' + esc(pins[id] || '') + '" placeholder="sem PIN"></div>';
+      }).join('') + '</div><button class="btn sm on" type="button" data-act="ponto-salvar-pins">Salvar PINs</button>' +
+        '<p class="muted">Professor sem PIN não consegue bater ponto. Combine o PIN com cada um no particular.</p>') :
+        ('<button class="btn sm" type="button" data-act="ponto-carregar-pins"' + (V.pontoPinsCarregando ? ' disabled' : '') + '>' + (V.pontoPinsCarregando ? 'Carregando…' : 'Ver e editar PINs') + '</button>')) +
+      '</section>';
+    return topo + nav + corpo + manual + config;
+  }
+
+  function dlgCorrigirAula(entradaId, saidaId) {
+    const e = (V.pontoRegs || []).find(function (r) { return r.id === entradaId; });
+    const s = (V.pontoRegs || []).find(function (r) { return r.id === saidaId; });
+    if (!e || !s) return;
+    abrirDlg('<article class="dlg-card"><header><h2>Corrigir aula — ' + esc(e.profNome || '') + '</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header>' +
+      '<div class="dlg-corpo">' +
+      '<p class="muted">' + esc(L.fmtLonga(L.dataLocal(e.em))) + ' · ' + esc(e.turma || '') + '</p>' +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Entrada</label><input type="time" id="pc-entrada" value="' + esc(L.horaLocal(e.em)) + '"></div>' +
+      '<div class="campo"><label>Saída</label><input type="time" id="pc-saida" value="' + esc(L.horaLocal(s.em)) + '"></div>' +
+      '<div class="campo"><label>Turma</label><input type="text" id="pc-turma" value="' + esc(e.turma || '') + '"></div>' +
+      '</div>' +
+      '<div class="ct-acoes"><button class="btn sm on" type="button" data-act="ponto-salvar-aula" data-e="' + esc(e.id) + '" data-s="' + esc(s.id) + '">Salvar</button>' +
+      '<button class="btn sm" type="button" data-act="ponto-apagar-aula" data-e="' + esc(e.id) + '" data-s="' + esc(s.id) + '">Apagar esta aula</button></div>' +
+      '</div></article>');
+  }
+  function dlgCompletarBatida(id) {
+    const r = (V.pontoRegs || []).find(function (x) { return x.id === id; });
+    if (!r) return;
+    const falta = r.tipo === 'entrada' ? 'saída' : 'entrada';
+    abrirDlg('<article class="dlg-card"><header><h2>Completar ' + falta + ' — ' + esc(r.profNome || '') + '</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header>' +
+      '<div class="dlg-corpo">' +
+      '<p class="muted">' + esc(L.fmtLonga(L.dataLocal(r.em))) + ' · ' + (r.tipo === 'entrada' ? 'entrou' : 'saiu') + ' às <b>' + esc(L.horaLocal(r.em)) + '</b>' + (r.turma ? (' · ' + esc(r.turma)) : '') + '</p>' +
+      '<div class="campo"><label>Horário da ' + falta + '</label><input type="time" id="pc-hora"></div>' +
+      '<div class="ct-acoes"><button class="btn sm on" type="button" data-act="ponto-salvar-completar" data-id="' + esc(r.id) + '">Salvar</button></div>' +
+      '</div></article>');
+  }
+  function imprimirQrPonto() {
+    const link = linkPaginaPonto();
+    const w = window.open('', '_blank');
+    if (!w) { toast('O navegador bloqueou a janela. Libere pop-ups pra este site.'); return; }
+    w.document.write('<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Ponto · Washington Ilha</title>' +
+      '<style>body{font-family:system-ui,sans-serif;text-align:center;padding:2rem;color:#0a2f4b}h1{font-size:2.2rem;margin:.2rem 0}#qr{display:inline-block;margin:1.5rem auto}p{font-size:1.15rem;max-width:30rem;margin:.6rem auto}small{color:#555;word-break:break-all}</style></head><body>' +
+      '<h1>Ponto dos professores</h1><p>Aponte a câmera do celular, escolha seu nome, digite seu PIN e toque em <b>Entrada</b> ao chegar e <b>Saída</b> ao sair.</p>' +
+      '<div id="qr"></div><p><small>' + esc(link) + '</small></p>' +
+      '<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>' +
+      '<script>new QRCode(document.getElementById("qr"),{text:' + JSON.stringify(link) + ',width:320,height:320});setTimeout(function(){window.print();},800);<\/script>' +
+      '</body></html>');
+    w.document.close();
   }
 
   /* ---------- Ocorrências de professor (faltas/reposições/substituições): aba própria, separada
@@ -2040,12 +2343,15 @@
       baixarCSV('entradas.csv', ['Data', 'Aluno', 'Valor', 'Forma de pagamento', 'Referente a', 'Observação'], linhas);
       registrar('Exportou Entradas em CSV', V.fMesEntradas ? nomeMes(V.fMesEntradas) : 'todos os meses');
     },
-    'exportar-despesas-csv': function () {
-      const lista = (V.fMesDespesas ? S.despesas.filter(function (d) { return mesDeData(d.data) === V.fMesDespesas; }) : S.despesas.slice())
+    'exportar-despesas-csv': function (el) {
+      const conta = contaDoEl(el);
+      const fMesKey = filtroMesDespesasKey(conta);
+      const listaCompleta = listaDespesasDoConta(conta);
+      const lista = (V[fMesKey] ? listaCompleta.filter(function (d) { return mesDeData(d.data) === V[fMesKey]; }) : listaCompleta.slice())
         .sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
       const linhas = lista.map(function (d) { return [d.data || '', d.descricao || '', d.categoria || '', normalizarValorMoeda(d.valor) || '', d.pagoPor || '', d.pago ? 'Pago' : 'A pagar', d.obs || '']; });
-      baixarCSV('despesas.csv', ['Data', 'Descrição', 'Categoria', 'Valor', 'Pago por', 'Status', 'Observação'], linhas);
-      registrar('Exportou Despesas em CSV', V.fMesDespesas ? nomeMes(V.fMesDespesas) : 'todos os meses');
+      baixarCSV(conta === 'unifecaf' ? 'despesas-unifecaf.csv' : 'despesas.csv', ['Data', 'Descrição', 'Categoria', 'Valor', 'Pago por', 'Status', 'Observação'], linhas);
+      registrar('Exportou Despesas' + (conta === 'unifecaf' ? ' UniFECAF' : '') + ' em CSV', V[fMesKey] ? nomeMes(V[fMesKey]) : 'todos os meses');
     },
     'busca-geral': function (el) { V.buscaTurma = el.value; render(); },
     'tel-prof': function (el) { S.professores[Number(el.dataset.i)].telefone = el.value; LS.set('professores', S.professores); registrar('Editou telefone de professor', S.professores[Number(el.dataset.i)].nome); },
@@ -2317,7 +2623,7 @@
     'cancelamento-data': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cancelamento.data = el.value; LS.set('alunos', S.alunos); } },
     'cancelamento-motivo': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cancelamento.motivo = el.value; LS.set('alunos', S.alunos); registrar('Definiu motivo de cancelamento', a.nome + ' → ' + el.value); } },
     'baixar-data': function () {
-      const payload = { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados, modelosComunicado: S.modelosComunicado, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
+      const payload = { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, despesasUnifecaf: S.despesasUnifecaf, pendencias: S.pendencias, comunicados: S.comunicados, modelosComunicado: S.modelosComunicado, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
       baixar('data.js', 'window.WASH_DATA = ' + JSON.stringify(payload, null, 1) + ';\n', 'text/javascript;charset=utf-8');
       toast('data.js baixado');
     },
@@ -2520,6 +2826,17 @@
     'nc-horario': function (el) { V.novoCompromisso.horario = el.value; },
     'nc-local': function (el) { V.novoCompromisso.local = el.value; },
     'nc-obs': function (el) { V.novoCompromisso.obs = el.value; },
+    'ativar-notificacoes-compromisso': function () {
+      if (!notificacoesSuportadas()) { toast('Este navegador não aceita notificações.'); return; }
+      Notification.requestPermission().then(function (p) {
+        toast(p === 'granted' ? 'Notificações ativadas!' : 'Não foi possível ativar — o navegador não autorizou.');
+        render();
+      });
+    },
+    'testar-notificacao-compromisso': function () {
+      notificarNovoCompromisso({ id: 'teste', titulo: 'Teste de notificação', comQuem: 'Isa', data: HOJE, horario: '', local: '', status: 'agendado' });
+      toast('Se não apareceu nada, confira se o navegador/sistema está bloqueando notificações pra este site.');
+    },
     'add-compromisso': function () {
       const nc = V.novoCompromisso;
       if (!nc.titulo || !nc.titulo.trim()) { toast('Dê um título para o compromisso.'); return; }
@@ -2531,6 +2848,7 @@
         status: 'agendado', criadoEm: new Date().toISOString(), criadoPor: autorAtual(),
       };
       S.compromissos.push(compromisso);
+      idsCompromissosConhecidos.add(compromisso.id);
       LS.set('compromissos', S.compromissos);
       registrar('Agendou compromisso', compromisso.titulo + ' em ' + compromisso.data + (compromisso.horario ? (' ' + compromisso.horario) : ''));
       V.novoCompromisso = { titulo: '', alunoId: '', alunoNome: '', comQuem: 'Isa', data: '', horario: '', local: '', obs: '' };
@@ -2728,74 +3046,123 @@
       registrar('Corrigiu data de entrada', (e.alunoNome || '—') + ' → ' + el.value);
       render();
     },
-    /* ---- Despesas ---- */
-    'de-data': function (el) { V.novaDespesa.data = el.value; },
-    'de-descricao': function (el) { V.novaDespesa.descricao = el.value; },
-    'de-categoria': function (el) { V.novaDespesa.categoria = el.value; },
-    'de-valor': function (el) { V.novaDespesa.valor = el.value; },
-    'de-pagopor': function (el) { V.novaDespesa.pagoPor = el.value; },
-    'de-pago': function (el) { V.novaDespesa.pago = el.checked; render(); },
-    'de-fixa': function (el) { V.novaDespesa.fixa = el.checked; render(); },
-    'de-obs': function (el) { V.novaDespesa.obs = el.value; },
-    'filtro-mes-despesas': function (el) { V.fMesDespesas = el.value; render(); },
-    'add-despesa': function () {
-      const nd = V.novaDespesa;
+    /* ---- Despesas (Washington e UniFECAF — veja contaDoEl/listaDespesasDoConta) ---- */
+    'de-data': function (el) { novaDespesaDoConta(contaDoEl(el)).data = el.value; },
+    'de-descricao': function (el) { novaDespesaDoConta(contaDoEl(el)).descricao = el.value; },
+    'de-categoria': function (el) { novaDespesaDoConta(contaDoEl(el)).categoria = el.value; },
+    'de-valor': function (el) { novaDespesaDoConta(contaDoEl(el)).valor = el.value; },
+    'de-pagopor': function (el) { novaDespesaDoConta(contaDoEl(el)).pagoPor = el.value; },
+    'de-pago': function (el) { novaDespesaDoConta(contaDoEl(el)).pago = el.checked; render(); },
+    'de-fixa': function (el) { novaDespesaDoConta(contaDoEl(el)).fixa = el.checked; render(); },
+    /* "Compra parcelada" e "despesa fixa" não combinam (uma é recorrente pra sempre, a outra tem
+       fim contado) — marcar parcelada desliga a fixa, pra não tentar lançar as duas coisas juntas. */
+    'de-parcelado': function (el) {
+      const nd = novaDespesaDoConta(contaDoEl(el));
+      nd.parcelado = el.checked;
+      if (nd.parcelado) nd.fixa = false;
+      render();
+    },
+    'de-parcelas': function (el) { novaDespesaDoConta(contaDoEl(el)).parcelas = el.value; },
+    'de-obs': function (el) { novaDespesaDoConta(contaDoEl(el)).obs = el.value; },
+    'filtro-mes-despesas': function (el) { V[filtroMesDespesasKey(contaDoEl(el))] = el.value; render(); },
+    'add-despesa': function (el) {
+      const conta = contaDoEl(el);
+      const nd = novaDespesaDoConta(conta);
       if (!nd.data) { toast('Escolha a data.'); return; }
       if (!nd.descricao || !nd.descricao.trim()) { toast('Descreva a despesa.'); return; }
-      if (!nd.valor) { toast('Informe o valor.'); return; }
-      const despesa = {
-        id: proxId('des', S.despesas), data: nd.data, descricao: nd.descricao.trim(), categoria: nd.categoria || 'Outro',
-        valor: normalizarValorMoeda(nd.valor), pagoPor: (nd.pagoPor || '').trim(), pago: !!nd.pago, fixa: !!nd.fixa, obs: nd.obs || '',
-        criadoEm: new Date().toISOString(), criadoPor: autorAtual(),
-      };
-      S.despesas.push(despesa);
-      LS.set('despesas', S.despesas);
-      registrar('Registrou despesa', despesa.descricao + ' · ' + fmtReais(nd.valor));
-      V.novaDespesa = { data: nd.data, descricao: '', categoria: nd.categoria || 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false };
-      toast('Despesa registrada.');
+      if (!nd.valor) { toast('Informe o valor' + (nd.parcelado ? ' de cada parcela.' : '.')); return; }
+      const lista = listaDespesasDoConta(conta);
+      const prefixoId = conta === 'unifecaf' ? 'deu' : 'des';
+      if (nd.parcelado) {
+        const n = parseInt(nd.parcelas, 10);
+        if (!n || n < 2) { toast('Informe o número de parcelas (2 ou mais).'); return; }
+        const grupoId = prefixoId + 'grp_' + Date.now().toString(36);
+        for (let i = 0; i < n; i++) {
+          lista.push({
+            id: proxId(prefixoId, lista), data: somarMeses(nd.data, i), descricao: nd.descricao.trim(), categoria: nd.categoria || 'Outro',
+            valor: normalizarValorMoeda(nd.valor), pagoPor: (nd.pagoPor || '').trim(), pago: i === 0 ? !!nd.pago : false, fixa: false, obs: nd.obs || '',
+            parcelamentoId: grupoId, parcelaNum: i + 1, parcelaTotal: n,
+            criadoEm: new Date().toISOString(), criadoPor: autorAtual(),
+          });
+        }
+        LS.set(chaveLSDespesas(conta), lista);
+        registrar('Registrou despesa parcelada', nd.descricao.trim() + ' · ' + n + 'x ' + fmtReais(nd.valor));
+        toast('Despesa parcelada em ' + n + ' vezes, registrada.');
+      } else {
+        lista.push({
+          id: proxId(prefixoId, lista), data: nd.data, descricao: nd.descricao.trim(), categoria: nd.categoria || 'Outro',
+          valor: normalizarValorMoeda(nd.valor), pagoPor: (nd.pagoPor || '').trim(), pago: !!nd.pago, fixa: !!nd.fixa, obs: nd.obs || '',
+          criadoEm: new Date().toISOString(), criadoPor: autorAtual(),
+        });
+        LS.set(chaveLSDespesas(conta), lista);
+        registrar('Registrou despesa' + (conta === 'unifecaf' ? ' UniFECAF' : ''), nd.descricao.trim() + ' · ' + fmtReais(nd.valor));
+        toast('Despesa registrada.');
+      }
+      const limpo = { data: nd.data, descricao: '', categoria: nd.categoria || 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false, parcelado: false, parcelas: '' };
+      if (conta === 'unifecaf') V.novaDespesaUnifecaf = limpo; else V.novaDespesa = limpo;
       render();
     },
     /* Lança no mês atual uma cópia de uma despesa fixa já cadastrada (mesma descrição/categoria/
        valor/pago por), sem precisar redigitar tudo de novo. */
     'lancar-despesa-fixa': function (el) {
-      const modelo = despesasFixasModelos().find(function (m) { return m.descricao === el.dataset.desc; });
+      const conta = contaDoEl(el);
+      const modelo = despesasFixasModelos(conta).find(function (m) { return m.descricao === el.dataset.desc; });
       if (!modelo) return;
       const mesAtual = mesDeData(HOJE);
-      if (despesaFixaJaLancadaNoMes(modelo, mesAtual)) { toast('Essa despesa já foi lançada este mês.'); return; }
+      if (despesaFixaJaLancadaNoMes(modelo, mesAtual, conta)) { toast('Essa despesa já foi lançada este mês.'); return; }
+      const lista = listaDespesasDoConta(conta);
+      const prefixoId = conta === 'unifecaf' ? 'deu' : 'des';
       const despesa = {
-        id: proxId('des', S.despesas), data: HOJE, descricao: modelo.descricao, categoria: modelo.categoria || 'Outro',
+        id: proxId(prefixoId, lista), data: HOJE, descricao: modelo.descricao, categoria: modelo.categoria || 'Outro',
         valor: modelo.valor, pagoPor: modelo.pagoPor || '', pago: false, fixa: true, obs: modelo.obs || '',
         criadoEm: new Date().toISOString(), criadoPor: autorAtual(),
       };
-      S.despesas.push(despesa);
-      LS.set('despesas', S.despesas);
+      lista.push(despesa);
+      LS.set(chaveLSDespesas(conta), lista);
       registrar('Lançou despesa fixa do mês', despesa.descricao + ' · ' + fmtReais(despesa.valor));
       toast('Despesa fixa lançada em ' + nomeMes(mesAtual) + '.');
       render();
     },
     'despesa-toggle': function (el) {
-      const d = S.despesas.find(function (x) { return x.id === el.dataset.id; });
+      const conta = contaDoEl(el);
+      const d = listaDespesasDoConta(conta).find(function (x) { return x.id === el.dataset.id; });
       if (!d) return;
       d.pago = !d.pago;
-      LS.set('despesas', S.despesas);
+      LS.set(chaveLSDespesas(conta), listaDespesasDoConta(conta));
       registrar('Atualizou despesa', d.descricao + ' · pago = ' + d.pago);
       render();
     },
     'excluir-despesa': function (el) {
-      const d = S.despesas.find(function (x) { return x.id === el.dataset.id; });
+      const conta = contaDoEl(el);
+      const d = listaDespesasDoConta(conta).find(function (x) { return x.id === el.dataset.id; });
       if (!d) return;
       if (typeof confirm === 'function' && !confirm('Excluir a despesa "' + d.descricao + '"?')) return;
-      S.despesas = S.despesas.filter(function (x) { return x.id !== d.id; });
-      LS.set('despesas', S.despesas);
+      definirListaDespesasDoConta(conta, listaDespesasDoConta(conta).filter(function (x) { return x.id !== d.id; }));
+      LS.set(chaveLSDespesas(conta), listaDespesasDoConta(conta));
       registrar('Excluiu despesa', d.descricao);
+      render();
+    },
+    /* Cancela de uma vez as parcelas de uma compra parcelada que ainda não foram pagas (deixa as
+       que já foram pagas intactas, pra não perder o histórico do que já saiu do bolso). */
+    'excluir-parcelas-restantes': function (el) {
+      const conta = contaDoEl(el);
+      const grupo = el.dataset.grupo;
+      const restantes = listaDespesasDoConta(conta).filter(function (x) { return x.parcelamentoId === grupo && !x.pago; });
+      if (!restantes.length) { toast('Não há parcelas pendentes dessa compra.'); return; }
+      if (typeof confirm === 'function' && !confirm('Cancelar ' + restantes.length + ' parcela(s) ainda não paga(s) dessa compra?')) return;
+      definirListaDespesasDoConta(conta, listaDespesasDoConta(conta).filter(function (x) { return !(x.parcelamentoId === grupo && !x.pago); }));
+      LS.set(chaveLSDespesas(conta), listaDespesasDoConta(conta));
+      registrar('Cancelou parcelas restantes de despesa', restantes[0].descricao);
+      toast('Parcelas restantes canceladas.');
       render();
     },
     /* Corrige a data de uma despesa já registrada (comum quando a equipe lança com atraso). */
     'de-editar-data': function (el) {
-      const d = S.despesas.find(function (x) { return x.id === el.dataset.id; });
+      const conta = contaDoEl(el);
+      const d = listaDespesasDoConta(conta).find(function (x) { return x.id === el.dataset.id; });
       if (!d || !el.value) return;
       d.data = el.value;
-      LS.set('despesas', S.despesas);
+      LS.set(chaveLSDespesas(conta), listaDespesasDoConta(conta));
       registrar('Corrigiu data de despesa', d.descricao + ' → ' + el.value);
       render();
     },
@@ -2909,6 +3276,115 @@
       registrar('Excluiu modelo de comunicado', m.nome);
       render();
     },
+    /* ---- Ponto digital ---- */
+    'ponto-periodo': function (el) { const d = Number(el.dataset.d); V.pontoDesloc = d === 0 ? 0 : V.pontoDesloc + d; render(); },
+    'ponto-copiar-link': function () { copiar(linkPaginaPonto()); },
+    'ponto-imprimir-qr': function () { imprimirQrPonto(); },
+    'ponto-dia-corte': function (el) {
+      const n = parseInt(el.value, 10);
+      if (!(n >= 1 && n <= 28)) return;
+      if (n === diaCortePonto()) return;
+      S.cfg.pontoDiaCorte = n; LS.set('cfg', S.cfg);
+      registrar('Mudou o dia de fechamento do ponto', 'dia ' + n);
+      pontoOuvindoChave = ''; render();
+    },
+    'ponto-carregar-pins': function () {
+      V.pontoPinsCarregando = true; render();
+      Sync.pontoLerPins().then(function (pins) { V.pontoPins = pins; V.pontoPinsCarregando = false; render(); },
+        function () { V.pontoPinsCarregando = false; toast('Não consegui ler os PINs. Confira as regras do Firebase (README).'); render(); });
+    },
+    'ponto-pin': function (el) { V.pontoPins[el.dataset.id] = el.value.replace(/\D/g, '').slice(0, 4); },
+    'ponto-salvar-pins': function () {
+      const pins = V.pontoPins || {};
+      const invalidos = Object.keys(pins).filter(function (id) { return pins[id] && pins[id].length !== 4; });
+      if (invalidos.length) { toast('Cada PIN precisa ter exatamente 4 números.'); return; }
+      const ids = S.professores.map(function (p) { return L.pontoSlug(p.nome); });
+      Promise.all(ids.map(function (id) { return Sync.pontoSalvarPin(id, pins[id] || ''); })).then(function () {
+        registrar('Atualizou os PINs do ponto', '');
+        publicarConfigPontoSeMudou();
+        toast('PINs salvos.');
+      }, function () { toast('Não consegui salvar os PINs. Confira as regras do Firebase (README).'); });
+    },
+    'pm-prof': function (el) { V.pontoManual.profId = el.value; },
+    'pm-data': function (el) { V.pontoManual.data = el.value; },
+    'pm-entrada': function (el) { V.pontoManual.entrada = el.value; },
+    'pm-saida': function (el) { V.pontoManual.saida = el.value; },
+    'pm-turma': function (el) { V.pontoManual.turma = el.value; },
+    'ponto-add-manual': function () {
+      const m = V.pontoManual;
+      const prof = professorPorPontoId(m.profId);
+      if (!prof) { toast('Escolha o professor.'); return; }
+      if (!m.data || !horaValida(m.entrada) || !horaValida(m.saida)) { toast('Preencha data, entrada e saída.'); return; }
+      const e = msDe(m.data, hhmm(m.entrada)), s = msDe(m.data, hhmm(m.saida));
+      if (s <= e) { toast('A saída precisa ser depois da entrada.'); return; }
+      const autor = autorAtual();
+      const base = { profId: m.profId, profNome: prof.nome, turma: m.turma || '', turmaId: '', autor: autor };
+      Promise.all([
+        Sync.pontoCriarManual(Object.assign({}, base, { tipo: 'entrada', em: e })),
+        Sync.pontoCriarManual(Object.assign({}, base, { tipo: 'saida', em: s })),
+      ]).then(function () {
+        registrar('Lançou aula à mão no ponto', prof.nome + ' · ' + L.fmtCurta(m.data) + ' ' + m.entrada + '–' + m.saida);
+        V.pontoManual = { profId: '', data: HOJE, entrada: '', saida: '', turma: '' };
+        toast('Aula lançada.'); render();
+      }, function () { toast('Não consegui salvar. Confira a internet.'); });
+    },
+    'ponto-editar-aula': function (el) { dlgCorrigirAula(el.dataset.e, el.dataset.s); },
+    'ponto-salvar-aula': function (el) {
+      const e = (V.pontoRegs || []).find(function (r) { return r.id === el.dataset.e; });
+      const s = (V.pontoRegs || []).find(function (r) { return r.id === el.dataset.s; });
+      if (!e || !s) return;
+      const he = $('#pc-entrada').value, hs = $('#pc-saida').value, turma = $('#pc-turma').value;
+      if (!horaValida(he) || !horaValida(hs)) { toast('Preencha entrada e saída.'); return; }
+      const dia = L.dataLocal(e.em);
+      const emE = msDe(dia, hhmm(he)), emS = msDe(dia, hhmm(hs));
+      if (emS <= emE) { toast('A saída precisa ser depois da entrada.'); return; }
+      const autor = autorAtual();
+      const mudaE = emE !== e.em || turma !== (e.turma || ''), mudaS = emS !== s.em;
+      Promise.all([
+        mudaE ? Sync.pontoAtualizar(e.id, Object.assign({ em: emE, turma: turma, manual: true, autor: autor }, turma !== (e.turma || '') ? { turmaId: '' } : {})) : null,
+        mudaS ? Sync.pontoAtualizar(s.id, { em: emS, manual: true, autor: autor }) : null,
+      ]).then(function () {
+        registrar('Corrigiu aula no ponto', (e.profNome || '') + ' · ' + L.fmtCurta(dia) + ' ' + he + '–' + hs);
+        fecharDlg(); toast('Aula corrigida.');
+      }, function () { toast('Não consegui salvar. Confira a internet.'); });
+    },
+    'ponto-apagar-aula': function (el) {
+      if (!confirm('Apagar esta aula (entrada e saída)?')) return;
+      Promise.all([Sync.pontoExcluir(el.dataset.e), Sync.pontoExcluir(el.dataset.s)]).then(function () {
+        registrar('Apagou aula do ponto', '');
+        fecharDlg(); toast('Aula apagada.');
+      }, function () { toast('Não consegui apagar. Confira a internet.'); });
+    },
+    'ponto-completar': function (el) { dlgCompletarBatida(el.dataset.id); },
+    'ponto-salvar-completar': function (el) {
+      const r = (V.pontoRegs || []).find(function (x) { return x.id === el.dataset.id; });
+      if (!r) return;
+      const h = $('#pc-hora').value;
+      if (!horaValida(h)) { toast('Informe o horário.'); return; }
+      const em = msDe(L.dataLocal(r.em), hhmm(h));
+      const tipo = r.tipo === 'entrada' ? 'saida' : 'entrada';
+      if ((tipo === 'saida' && em <= r.em) || (tipo === 'entrada' && em >= r.em)) { toast(tipo === 'saida' ? 'A saída precisa ser depois da entrada.' : 'A entrada precisa ser antes da saída.'); return; }
+      Sync.pontoCriarManual({ profId: r.profId, profNome: r.profNome || '', turma: r.turma || '', turmaId: r.turmaId || '', tipo: tipo, em: em, autor: autorAtual() }).then(function () {
+        registrar('Completou batida no ponto', (r.profNome || '') + ' · ' + L.fmtCurta(L.dataLocal(r.em)) + ' ' + (tipo === 'saida' ? 'saída' : 'entrada') + ' ' + h);
+        fecharDlg(); toast('Batida completada.');
+      }, function () { toast('Não consegui salvar. Confira a internet.'); });
+    },
+    'ponto-excluir-batida': function (el) {
+      if (!confirm('Apagar esta batida?')) return;
+      Sync.pontoExcluir(el.dataset.id).then(function () { registrar('Apagou batida do ponto', ''); toast('Batida apagada.'); },
+        function () { toast('Não consegui apagar. Confira a internet.'); });
+    },
+    'ponto-lancar-horas': function (el) {
+      const prof = el.dataset.prof, mes = el.dataset.mes, horas = String(el.dataset.horas);
+      const anterior = S.horasAula.find(function (h) { return L.norm(h.professor) === L.norm(prof) && mesDeData(h.semana) === mes; });
+      if (anterior && String(normalizarValorMoeda(anterior.horas)) !== horas && !confirm('Já tem ' + anterior.horas + 'h lançadas para ' + prof + ' em ' + nomeMes(mes) + '. Trocar por ' + horas.replace('.', ',') + 'h do ponto?')) return;
+      S.horasAula = S.horasAula.filter(function (h) { return !(L.norm(h.professor) === L.norm(prof) && mesDeData(h.semana) === mes); });
+      S.horasAula.push({ id: proxId('ha', S.horasAula), professor: prof, semana: mes + '-01', horas: horas, origem: 'ponto' });
+      LS.set('horasAula', S.horasAula);
+      registrar('Lançou horas-aula do ponto', prof + ' · ' + nomeMes(mes) + ' · ' + horas + 'h');
+      toast('Horas lançadas em Professores.');
+      render();
+    },
     /* ---- Login ---- */
     'login-email': function (el) { V.loginEmail = el.value; },
     'login-senha': function (el) { V.loginSenha = el.value; },
@@ -2966,8 +3442,9 @@
   /* ---------- Sincronização entre navegadores ---------- */
   function aplicarRemoto(dados) {
     let mudou = false;
-    ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'pendencias', 'comunicados', 'modelosComunicado', 'ocorrenciasProfessor', 'horasAula'].forEach(function (k) {
+    ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'despesasUnifecaf', 'pendencias', 'comunicados', 'modelosComunicado', 'ocorrenciasProfessor', 'horasAula'].forEach(function (k) {
       if (dados[k] !== undefined) {
+        if (k === 'compromissos') notificarCompromissosNovos(dados.compromissos);
         S[k] = dados[k];
         if (k === 'alunos') normalizarAlunos(S.alunos);
         if (k === 'professores') normalizarValorHoraAulaProfessores();
@@ -2980,7 +3457,7 @@
   recalc();
 
   function estadoAtualParaSemear() {
-    return { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, cfg: S.cfg, log: S.log, asaasImportado: S.asaasImportado, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, pendencias: S.pendencias, comunicados: S.comunicados, modelosComunicado: S.modelosComunicado, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
+    return { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, cfg: S.cfg, log: S.log, asaasImportado: S.asaasImportado, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, despesasUnifecaf: S.despesasUnifecaf, pendencias: S.pendencias, comunicados: S.comunicados, modelosComunicado: S.modelosComunicado, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
   }
 
   let syncIniciado = false;

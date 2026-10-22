@@ -120,7 +120,72 @@
     return MAPA[codigo] || 'Não foi possível entrar. Confira o e-mail e a senha.';
   }
 
+  /* ---------- Ponto digital dos professores ----------
+     Fica fora do documento principal (washington/estado): cada batida é um documento na coleção
+     `ponto`, gravada pela página ponto.html com o horário do servidor. Aqui ficam as funções que o
+     painel (com login) usa pra ler, corrigir e configurar o ponto. */
+  function msParaTimestamp(ms) { return firebase.firestore.Timestamp.fromMillis(ms); }
+  function docParaRegistro(d) {
+    const x = d.data() || {};
+    const em = x.em && typeof x.em.toMillis === 'function' ? x.em.toMillis() : null;
+    return Object.assign({}, x, { id: d.id, em: em });
+  }
+
+  /** Escuta as batidas entre iniMs (inclusive) e fimMs (exclusive). Devolve função pra parar. */
+  function pontoOuvir(iniMs, fimMs, cb, onErro) {
+    if (!CONFIG) { cb([]); return function () {}; }
+    let parar = null, cancelado = false;
+    garantirFirebase().then(function () {
+      if (cancelado) return;
+      parar = firebase.firestore().collection('ponto')
+        .where('em', '>=', msParaTimestamp(iniMs)).where('em', '<', msParaTimestamp(fimMs))
+        .onSnapshot(function (snap) {
+          cb(snap.docs.map(docParaRegistro).filter(function (r) { return r.em != null; }));
+        }, function (err) { onErro && onErro(err); });
+    }).catch(function (err) { onErro && onErro(err); });
+    return function () { cancelado = true; if (parar) parar(); };
+  }
+
+  /** Batida lançada à mão pela coordenação (correção de esquecimento etc.). */
+  function pontoCriarManual(reg) {
+    return garantirFirebase().then(function () {
+      const corpo = Object.assign({}, reg, { em: msParaTimestamp(reg.em), manual: true });
+      return firebase.firestore().collection('ponto').add(corpo);
+    });
+  }
+  function pontoAtualizar(id, campos) {
+    return garantirFirebase().then(function () {
+      const c = Object.assign({}, campos);
+      if (c.em != null) c.em = msParaTimestamp(c.em);
+      return firebase.firestore().collection('ponto').doc(id).update(c);
+    });
+  }
+  function pontoExcluir(id) {
+    return garantirFirebase().then(function () { return firebase.firestore().collection('ponto').doc(id).delete(); });
+  }
+  /** Lista pública (só nomes e turmas, nada de dado pessoal) que a página do ponto mostra. */
+  function pontoPublicarConfig(cfg) {
+    if (!CONFIG) return Promise.resolve(false);
+    return garantirFirebase().then(function () {
+      return firebase.firestore().collection('pontoPublico').doc('config').set(Object.assign({}, cfg, { atualizadoEm: new Date().toISOString() }));
+    }).then(function () { return true; }, function () { return false; });
+  }
+  /** PINs: só quem tem login no painel lê ou grava. Devolve { profId: '1234', ... }. */
+  function pontoLerPins() {
+    if (!CONFIG) return Promise.resolve({});
+    return garantirFirebase().then(function () { return firebase.firestore().collection('pontoPins').get(); })
+      .then(function (snap) { const o = {}; snap.docs.forEach(function (d) { o[d.id] = (d.data() || {}).pin || ''; }); return o; });
+  }
+  function pontoSalvarPin(profId, pin) {
+    return garantirFirebase().then(function () {
+      const ref = firebase.firestore().collection('pontoPins').doc(profId);
+      return pin ? ref.set({ pin: pin }) : ref.delete();
+    });
+  }
+
   return {
+    pontoOuvir: pontoOuvir, pontoCriarManual: pontoCriarManual, pontoAtualizar: pontoAtualizar, pontoExcluir: pontoExcluir,
+    pontoPublicarConfig: pontoPublicarConfig, pontoLerPins: pontoLerPins, pontoSalvarPin: pontoSalvarPin,
     configured: configured, init: init, push: push,
     watchAuth: watchAuth, signIn: signIn, signOut: signOut, mensagemErroLogin: mensagemErroLogin,
   };

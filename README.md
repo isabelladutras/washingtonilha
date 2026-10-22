@@ -215,6 +215,61 @@ Se algum dia quiser desligar a sincronização (e o login junto com ela), volte 
 
 > Esqueceu a senha? Quem administra o Firebase (você) pode trocar a senha de qualquer pessoa em **Authentication › Users › (três pontinhos) › Reset password**, sem precisar de e-mail de recuperação configurado.
 
+## Ponto digital dos professores
+
+O professor bate **entrada** e **saída** pelo celular, numa página separada (`ponto.html`), aberta pelo QR code na parede. Escolhe o nome, digita o PIN de 4 números, escolhe a turma e toca em Entrada ou Saída. **O horário vem do servidor do Firebase** — ninguém digita hora. Na aba **Ponto** do painel aparecem as aulas de cada professor no período de fechamento (21 a 20, igual à folha de papel; dá pra mudar o dia), com:
+
+- total em horas e minutos e o valor a pagar (horas × valor da hora-aula);
+- atrasos e saídas antes do horário da turma (tolerância de 5 minutos);
+- pendências (esqueceu de bater a entrada ou a saída), com botão **Completar**;
+- botão **Lançar ... h em Horas-aula de ...**, que grava o total em Professores › Horas-aula do mês (minutos ÷ 60, arredondado em 2 casas);
+- **Lançar aula à mão**, **Corrigir** e **Apagar**, para os casos em que o professor não conseguiu bater.
+
+### Ligar o ponto (uma vez só)
+
+1. Suba os arquivos novos/alterados para o GitHub (inclusive o `ponto.html`).
+2. No Firebase, em **Firestore Database › Regras**, troque tudo por isto e clique em **Publicar**:
+
+```
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /washington/{doc} {
+      allow read, write: if request.auth != null;
+    }
+    // Lista pública (só nomes e turmas) que a página do ponto mostra, sem login.
+    match /pontoPublico/{doc} {
+      allow read: if true;
+      allow write: if request.auth != null;
+    }
+    // PINs dos professores: só a equipe logada vê.
+    match /pontoPins/{prof} {
+      allow read, write: if request.auth != null;
+    }
+    // Batidas de ponto. Sem login, só dá pra CRIAR uma batida com o PIN certo e com o horário
+    // do servidor; ler, corrigir e apagar só com login.
+    match /ponto/{id} {
+      allow read, update, delete: if request.auth != null;
+      allow create: if request.auth != null || (
+        request.resource.data.keys().hasOnly(['profId', 'profNome', 'turma', 'turmaId', 'tipo', 'pin', 'em']) &&
+        request.resource.data.tipo in ['entrada', 'saida'] &&
+        request.resource.data.em == request.time &&
+        request.resource.data.profId is string &&
+        request.resource.data.turma is string && request.resource.data.turma.size() <= 120 &&
+        request.resource.data.pin is string &&
+        exists(/databases/$(database)/documents/pontoPins/$(request.resource.data.profId)) &&
+        get(/databases/$(database)/documents/pontoPins/$(request.resource.data.profId)).data.pin == request.resource.data.pin
+      );
+    }
+  }
+}
+```
+
+3. Abra o painel, vá na aba **Ponto** › **Ver e editar PINs**, dê um PIN de 4 números para cada professor e clique em **Salvar PINs**. Combine o PIN com cada um no particular.
+4. Clique em **Imprimir QR code** e cole na parede da recepção/sala dos professores.
+
+A lista de professores e turmas que a página do ponto mostra é atualizada sozinha sempre que alguém logado no painel muda professores ou turmas.
+
 ## Primeiro uso da equipe
 
 1. Abrir **Professores** e preencher o telefone de cada um.

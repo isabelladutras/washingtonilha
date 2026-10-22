@@ -8601,7 +8601,125 @@ window.FIREBASE_CONFIG = {
     return 'desconhecido';
   }
 
+  /* ---------- Ponto digital dos professores ----------
+     Cada batida (entrada ou saída) vira um registro { id, profId, profNome, turma, turmaId, tipo,
+     em } — `em` em milissegundos. As funções abaixo juntam as batidas em aulas e somam o tempo.
+     Ficam aqui (sem depender da tela) pra poderem ser testadas sozinhas. */
+
+  /** "Luciano Sartori" -> "luciano-sartori" (identificador estável do professor no ponto). */
+  function pontoSlug(nome) {
+    return norm(nome).replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+
+  /** 1672 -> "27h52"; 50 -> "0h50". */
+  function fmtHM(min) {
+    const m = Math.max(0, Math.round(Number(min) || 0));
+    return Math.floor(m / 60) + 'h' + String(m % 60).padStart(2, '0');
+  }
+
+  /** Data local AAAA-MM-DD e hora HH:MM de um instante em milissegundos. */
+  function dataLocal(ms) { return isoDeData(new Date(ms)); }
+  function horaLocal(ms) { const d = new Date(ms); return pad2Data(d.getHours()) + ':' + pad2Data(d.getMinutes()); }
+
+  /**
+   * Período de fechamento da folha de ponto: do dia (corte + 1) de um mês até o dia `corte` do
+   * mês seguinte — ex.: corte 20 → 21/09 a 20/10. `refISO` é qualquer dia dentro do período
+   * desejado; `deslocamento` anda N períodos pra frente/trás.
+   * Devolve { ini, fim } (AAAA-MM-DD, os dois inclusive) e `competencia` (AAAA-MM do início,
+   * que é o mês escrito no cabeçalho da folha — "Controle de aula setembro" = 21/09 a 20/10).
+   */
+  function periodoFechamento(refISO, diaCorte, deslocamento) {
+    const corte = Math.min(28, Math.max(1, parseInt(diaCorte, 10) || 20));
+    const p = String(refISO).split('-').map(Number);
+    let ano = p[0], mes = p[1]; // mês (1-12) em que o período COMEÇA
+    if (p[2] <= corte) { mes -= 1; if (mes < 1) { mes = 12; ano -= 1; } }
+    mes += (deslocamento || 0);
+    while (mes < 1) { mes += 12; ano -= 1; }
+    while (mes > 12) { mes -= 12; ano += 1; }
+    let anoFim = ano, mesFim = mes + 1;
+    if (mesFim > 12) { mesFim = 1; anoFim += 1; }
+    return {
+      ini: ano + '-' + pad2Data(mes) + '-' + pad2Data(corte + 1),
+      fim: anoFim + '-' + pad2Data(mesFim) + '-' + pad2Data(corte),
+      competencia: ano + '-' + pad2Data(mes),
+    };
+  }
+
+  /**
+   * Junta as batidas em aulas. Regras:
+   * - entrada abre uma aula; a próxima saída do MESMO dia fecha essa aula;
+   * - duas entradas seguidas → a primeira fica pendente ("sem saída");
+   * - saída sem entrada aberta → pendente ("sem entrada");
+   * - entrada que ficou aberta no fim: se for de hoje, é "em aula agora"; senão, "sem saída".
+   * Devolve um objeto por profId: { profId, profNome, aulas: [...], pendentes: [...], totalMin }.
+   * Cada aula: { data, entrada, saida, turma, turmaId, min }. Cada pendente: { motivo, reg }.
+   */
+  function parearPonto(registros, hojeISO) {
+    const porProf = {};
+    (registros || []).slice().sort(function (a, b) { return a.em - b.em; }).forEach(function (r) {
+      if (!r || !r.profId || !(r.em > 0)) return;
+      const g = porProf[r.profId] || (porProf[r.profId] = { profId: r.profId, profNome: r.profNome || r.profId, regs: [] });
+      if (r.profNome) g.profNome = r.profNome;
+      g.regs.push(r);
+    });
+    const out = {};
+    Object.keys(porProf).forEach(function (pid) {
+      const g = porProf[pid];
+      const aulas = [], pendentes = [], emAula = [];
+      let aberta = null;
+      function fecharPendente(motivo) { if (aberta) { pendentes.push({ motivo: motivo, reg: aberta }); aberta = null; } }
+      g.regs.forEach(function (r) {
+        if (r.tipo === 'entrada') {
+          fecharPendente('sem saída');
+          aberta = r;
+        } else if (r.tipo === 'saida') {
+          if (aberta && dataLocal(aberta.em) === dataLocal(r.em)) {
+            aulas.push({
+              data: dataLocal(aberta.em), entrada: aberta, saida: r,
+              turma: aberta.turma || r.turma || '', turmaId: aberta.turmaId || r.turmaId || '',
+              min: Math.round((r.em - aberta.em) / 60000),
+            });
+            aberta = null;
+          } else {
+            fecharPendente('sem saída');
+            pendentes.push({ motivo: 'sem entrada', reg: r });
+          }
+        }
+      });
+      if (aberta) {
+        if (hojeISO && dataLocal(aberta.em) === hojeISO) emAula.push(aberta);
+        else fecharPendente('sem saída');
+      }
+      out[pid] = {
+        profId: pid, profNome: g.profNome, aulas: aulas, pendentes: pendentes, emAula: emAula,
+        totalMin: aulas.reduce(function (s, a) { return s + a.min; }, 0),
+      };
+    });
+    return out;
+  }
+
+  /**
+   * Compara uma aula batida com o horário cadastrado da turma ("18h - 19:15h"). Devolve
+   * { atrasoMin, saidaCedoMin, extraMin } — só os valores acima da tolerância (em minutos),
+   * ou null se a turma não tiver horário reconhecível.
+   */
+  function compararComHorario(aula, horarioTxt, tolerancia) {
+    const hm = horarioMin(horarioTxt);
+    if (!hm || !aula || !aula.entrada || !aula.saida) return null;
+    const tol = tolerancia == null ? 5 : tolerancia;
+    const e = new Date(aula.entrada.em), s = new Date(aula.saida.em);
+    const eMin = e.getHours() * 60 + e.getMinutes(), sMin = s.getHours() * 60 + s.getMinutes();
+    const atraso = eMin - hm[0], cedo = hm[1] - sMin, extra = sMin - hm[1];
+    return {
+      atrasoMin: atraso > tol ? atraso : 0,
+      saidaCedoMin: cedo > tol ? cedo : 0,
+      extraMin: extra > tol ? extra : 0,
+    };
+  }
+
   return {
+    pontoSlug: pontoSlug, fmtHM: fmtHM, dataLocal: dataLocal, horaLocal: horaLocal,
+    periodoFechamento: periodoFechamento, parearPonto: parearPonto, compararComHorario: compararComHorario,
     DIAS_ORDEM: DIAS_ORDEM, DIAS_FULL: DIAS_FULL,
     norm: norm, diasDaTurma: diasDaTurma, horarioMin: horarioMin, horariosSeSobrepoem: horariosSeSobrepoem,
     gradeSemanal: gradeSemanal, conferirConflitos: conferirConflitos, juntarNatural: juntarNatural,
@@ -8742,7 +8860,72 @@ window.FIREBASE_CONFIG = {
     return MAPA[codigo] || 'Não foi possível entrar. Confira o e-mail e a senha.';
   }
 
+  /* ---------- Ponto digital dos professores ----------
+     Fica fora do documento principal (washington/estado): cada batida é um documento na coleção
+     `ponto`, gravada pela página ponto.html com o horário do servidor. Aqui ficam as funções que o
+     painel (com login) usa pra ler, corrigir e configurar o ponto. */
+  function msParaTimestamp(ms) { return firebase.firestore.Timestamp.fromMillis(ms); }
+  function docParaRegistro(d) {
+    const x = d.data() || {};
+    const em = x.em && typeof x.em.toMillis === 'function' ? x.em.toMillis() : null;
+    return Object.assign({}, x, { id: d.id, em: em });
+  }
+
+  /** Escuta as batidas entre iniMs (inclusive) e fimMs (exclusive). Devolve função pra parar. */
+  function pontoOuvir(iniMs, fimMs, cb, onErro) {
+    if (!CONFIG) { cb([]); return function () {}; }
+    let parar = null, cancelado = false;
+    garantirFirebase().then(function () {
+      if (cancelado) return;
+      parar = firebase.firestore().collection('ponto')
+        .where('em', '>=', msParaTimestamp(iniMs)).where('em', '<', msParaTimestamp(fimMs))
+        .onSnapshot(function (snap) {
+          cb(snap.docs.map(docParaRegistro).filter(function (r) { return r.em != null; }));
+        }, function (err) { onErro && onErro(err); });
+    }).catch(function (err) { onErro && onErro(err); });
+    return function () { cancelado = true; if (parar) parar(); };
+  }
+
+  /** Batida lançada à mão pela coordenação (correção de esquecimento etc.). */
+  function pontoCriarManual(reg) {
+    return garantirFirebase().then(function () {
+      const corpo = Object.assign({}, reg, { em: msParaTimestamp(reg.em), manual: true });
+      return firebase.firestore().collection('ponto').add(corpo);
+    });
+  }
+  function pontoAtualizar(id, campos) {
+    return garantirFirebase().then(function () {
+      const c = Object.assign({}, campos);
+      if (c.em != null) c.em = msParaTimestamp(c.em);
+      return firebase.firestore().collection('ponto').doc(id).update(c);
+    });
+  }
+  function pontoExcluir(id) {
+    return garantirFirebase().then(function () { return firebase.firestore().collection('ponto').doc(id).delete(); });
+  }
+  /** Lista pública (só nomes e turmas, nada de dado pessoal) que a página do ponto mostra. */
+  function pontoPublicarConfig(cfg) {
+    if (!CONFIG) return Promise.resolve(false);
+    return garantirFirebase().then(function () {
+      return firebase.firestore().collection('pontoPublico').doc('config').set(Object.assign({}, cfg, { atualizadoEm: new Date().toISOString() }));
+    }).then(function () { return true; }, function () { return false; });
+  }
+  /** PINs: só quem tem login no painel lê ou grava. Devolve { profId: '1234', ... }. */
+  function pontoLerPins() {
+    if (!CONFIG) return Promise.resolve({});
+    return garantirFirebase().then(function () { return firebase.firestore().collection('pontoPins').get(); })
+      .then(function (snap) { const o = {}; snap.docs.forEach(function (d) { o[d.id] = (d.data() || {}).pin || ''; }); return o; });
+  }
+  function pontoSalvarPin(profId, pin) {
+    return garantirFirebase().then(function () {
+      const ref = firebase.firestore().collection('pontoPins').doc(profId);
+      return pin ? ref.set({ pin: pin }) : ref.delete();
+    });
+  }
+
   return {
+    pontoOuvir: pontoOuvir, pontoCriarManual: pontoCriarManual, pontoAtualizar: pontoAtualizar, pontoExcluir: pontoExcluir,
+    pontoPublicarConfig: pontoPublicarConfig, pontoLerPins: pontoLerPins, pontoSalvarPin: pontoSalvarPin,
     configured: configured, init: init, push: push,
     watchAuth: watchAuth, signIn: signIn, signOut: signOut, mensagemErroLogin: mensagemErroLogin,
   };
@@ -8938,6 +9121,8 @@ window.FIREBASE_CONFIG = {
     novoProfessor: { nome: '', telefone: '' },
     novaOcorrenciaProfessor: { professor: '', tipo: 'falta', data: HOJE, obs: '' }, fProfOcorrencia: '',
     semProfsOcultos: {},
+    pontoDesloc: 0, pontoRegs: null, pontoErro: '', pontoPins: null, pontoPinsCarregando: false,
+    pontoManual: { profId: '', data: HOJE, entrada: '', saida: '', turma: '' },
     logado: !Sync.configured(), authEmail: '', loginEmail: '', loginSenha: '', loginErro: '', loginCarregando: false,
   };
   const D = {};
@@ -8982,6 +9167,7 @@ window.FIREBASE_CONFIG = {
     D.chamadaPorChave = {}; S.frequencias.forEach(function (c) { D.chamadaPorChave[c.turmaId + '|' + c.data] = c; });
     D.conflitos = L.conferirConflitos(S.turmas);
     D.semestres = Array.from(new Set(S.turmas.map(function (t) { return t.semestre; }))).sort();
+    publicarConfigPontoSeMudou();
   }
   function persistir() { LS.set('turmas', S.turmas); recalc(); }
 
@@ -9033,6 +9219,7 @@ window.FIREBASE_CONFIG = {
     dados: '<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>',
     email: '<rect x="2.5" y="4.5" width="19" height="15" rx="2.5"/><path d="m3.5 6 7.3 5.7a1.8 1.8 0 0 0 2.4 0L20.5 6"/>',
     cadeado: '<rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5"/>',
+    ponto: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
     cancelados: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/><path d="m8.5 17.5 7 4M15.5 17.5l-7 4"/>'
   };
   const VIEWS = [
@@ -9041,7 +9228,7 @@ window.FIREBASE_CONFIG = {
     { id: 'compromissos', nome: 'Compromissos' }, { id: 'frequencia', nome: 'Frequência' }, { id: 'inadimplencia', nome: 'Inadimplência' },
     { id: 'material', nome: 'Material' }, { id: 'entradas', nome: 'Entradas' }, { id: 'despesas', nome: 'Despesas' }, { id: 'despesasUnifecaf', nome: 'Despesas UniFECAF' },
     { id: 'alunos', nome: 'Alunos' }, { id: 'comunicados', nome: 'Comunicados' },
-    { id: 'professores', nome: 'Professores' }, { id: 'ocorrencias', nome: 'Ocorrências' }, { id: 'conferencia', nome: 'Conferência' },
+    { id: 'professores', nome: 'Professores' }, { id: 'ponto', nome: 'Ponto' }, { id: 'ocorrencias', nome: 'Ocorrências' }, { id: 'conferencia', nome: 'Conferência' },
     { id: 'buscar', nome: 'Buscar' }, { id: 'dados', nome: 'Dados' }
   ];
   function svg(id) { return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">' + ICON[id] + '</svg>'; }
@@ -9156,7 +9343,7 @@ window.FIREBASE_CONFIG = {
       geral: viewVisaoGeral,
       semana: viewSemana, pendencias: viewPendencias, turmas: viewTurmas, matriculas: viewMatriculas, compromissos: viewCompromissos,
       frequencia: viewFrequencia, inadimplencia: viewInadimplencia, material: viewMaterial, entradas: viewEntradas, despesas: viewDespesas, despesasUnifecaf: viewDespesasUnifecaf,
-      alunos: viewAlunos, comunicados: viewComunicados, professores: viewProfessores, ocorrencias: viewOcorrencias,
+      alunos: viewAlunos, comunicados: viewComunicados, professores: viewProfessores, ponto: viewPonto, ocorrencias: viewOcorrencias,
       conferencia: viewConferencia, buscar: viewBuscar, dados: viewDados
     }[V.view] || viewSemana)();
     if (!restaurarFoco(app, foco)) app.focus();
@@ -10283,6 +10470,226 @@ window.FIREBASE_CONFIG = {
           }).join('') + '</ul>') : '<p class="muted">Nenhum mês lançado ainda.</p>') +
           '</div>';
       }).join('') + '</div>';
+  }
+
+  /* ---------- Ponto digital dos professores ----------
+     O professor bate entrada e saída pela página ponto.html (QR code na parede), com o horário do
+     servidor — ninguém digita hora. Cada batida é um documento na coleção `ponto` do Firebase,
+     separado do estado principal. Esta aba junta as batidas em aulas, soma o período de
+     fechamento (21 a 20, como na folha de papel), mostra atrasos/saídas antes do horário da turma
+     e as pendências (esqueceu de bater), e lança o total em Professores › Horas-aula do mês. */
+  const TOLERANCIA_PONTO_MIN = 5;
+  function diaCortePonto() { const n = parseInt(S.cfg.pontoDiaCorte, 10); return n >= 1 && n <= 28 ? n : 20; }
+  function periodoPontoAtual() { return L.periodoFechamento(HOJE, diaCortePonto(), V.pontoDesloc); }
+  function msDe(dataISO, hhmm) { return new Date(dataISO + 'T' + hhmm + ':00').getTime(); }
+  function horaValida(h) { return /^([01]?\d|2[0-3]):[0-5]\d$/.test(String(h || '').trim()); }
+  function hhmm(h) { const p = String(h).trim().split(':'); return String(p[0]).padStart(2, '0') + ':' + p[1]; }
+  function professorPorPontoId(pid) { return S.professores.find(function (p) { return L.pontoSlug(p.nome) === pid; }) || null; }
+  function turmaAtivaParaPonto(t) {
+    return t.semestre === L.semestreDeData(HOJE) && !/finaliz|conclu|n[aã]o formou/i.test(t.situacao || '');
+  }
+  function rotuloTurmaPonto(t) { return t.turma + (t.dia || t.horario ? (' · ' + [t.dia, t.horario].filter(Boolean).join(' ')) : ''); }
+  function linkPaginaPonto() {
+    try { return new URL('ponto.html', location.href.split('?')[0].split('#')[0]).href; } catch (e) { return 'ponto.html'; }
+  }
+
+  /* Lista pública que a página do ponto lê (sem login): só nomes e turmas. Republica sozinha
+     quando professores/turmas mudam, a partir de qualquer painel logado que estiver aberto. */
+  function configPublicaPonto() {
+    const ativas = S.turmas.filter(turmaAtivaParaPonto);
+    return {
+      professores: S.professores.slice().sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); }).map(function (p) {
+        let dele = ativas.filter(function (t) { return L.norm(t.professor) === L.norm(p.nome); });
+        if (!dele.length) {
+          const todas = S.turmas.filter(function (t) { return L.norm(t.professor) === L.norm(p.nome); });
+          const ultimo = todas.map(function (t) { return t.semestre; }).sort().pop();
+          dele = todas.filter(function (t) { return t.semestre === ultimo && !/finaliz|conclu|n[aã]o formou/i.test(t.situacao || ''); });
+        }
+        return { id: L.pontoSlug(p.nome), nome: p.nome, turmas: dele.map(function (t) { return { id: t.id, nome: t.turma, quando: [t.dia, t.horario].filter(Boolean).join(' ') }; }) };
+      }),
+      todasTurmas: ativas.slice().sort(function (a, b) { return L.norm(a.turma).localeCompare(L.norm(b.turma)); })
+        .map(function (t) { return { id: t.id, nome: t.turma, quando: [t.dia, t.horario].filter(Boolean).join(' '), professor: t.professor }; }),
+    };
+  }
+  var pontoConfigPublicada = '', pontoConfigT = null;
+  function publicarConfigPontoSeMudou() {
+    if (!Sync.configured() || !V.logado || !Sync.pontoPublicarConfig) return;
+    clearTimeout(pontoConfigT);
+    pontoConfigT = setTimeout(function () {
+      const cfg = configPublicaPonto();
+      const assinatura = JSON.stringify(cfg);
+      if (assinatura === pontoConfigPublicada) return;
+      Sync.pontoPublicarConfig(cfg).then(function (ok) { if (ok) pontoConfigPublicada = assinatura; });
+    }, 1500);
+  }
+
+  /* Escuta as batidas do período que está na tela; troca a escuta quando muda o período. */
+  var pontoOuvindoChave = '', pontoPararOuvir = null;
+  function garantirPontoOuvindo() {
+    if (!Sync.configured() || !V.logado || !Sync.pontoOuvir) return;
+    const per = periodoPontoAtual();
+    const chave = per.ini + '|' + per.fim;
+    if (chave === pontoOuvindoChave) return;
+    if (pontoPararOuvir) pontoPararOuvir();
+    pontoOuvindoChave = chave;
+    V.pontoRegs = null; V.pontoErro = '';
+    pontoPararOuvir = Sync.pontoOuvir(msDe(per.ini, '00:00'), msDe(L.somaDias(per.fim, 1), '00:00'), function (regs) {
+      V.pontoRegs = regs; V.pontoErro = '';
+      if (V.view === 'ponto') render();
+    }, function () {
+      V.pontoErro = 'Não consegui ler o ponto. Confira se as regras do Firebase foram atualizadas (veja o README, seção "Ponto digital").';
+      if (V.view === 'ponto') render();
+    });
+  }
+  function pontoPorProfessor() {
+    return L.parearPonto(V.pontoRegs || [], HOJE);
+  }
+
+  function linhaAulaPonto(a) {
+    const t = a.turmaId ? D.turmaPorId[a.turmaId] : null;
+    const cmp = t ? L.compararComHorario(a, t.horario, TOLERANCIA_PONTO_MIN) : null;
+    const obs = [];
+    if (cmp && cmp.atrasoMin) obs.push('<span class="tag tag-aviso">chegou ' + cmp.atrasoMin + ' min depois</span>');
+    if (cmp && cmp.saidaCedoMin) obs.push('<span class="tag tag-aviso">saiu ' + cmp.saidaCedoMin + ' min antes</span>');
+    if (cmp && cmp.extraMin) obs.push('<span class="tag tag-neutro">ficou ' + cmp.extraMin + ' min a mais</span>');
+    if (a.min > 300) obs.push('<span class="tag tag-erro">mais de 5h — conferir</span>');
+    if (a.entrada.manual || a.saida.manual) obs.push('<span class="tag tag-neutro">corrigido à mão</span>');
+    return '<tr><td>' + esc(L.fmtCurta(a.data)) + '</td><td>' + esc(a.turma || '—') + '</td>' +
+      '<td>' + esc(L.horaLocal(a.entrada.em)) + '</td><td>' + esc(L.horaLocal(a.saida.em)) + '</td>' +
+      '<td><b>' + esc(L.fmtHM(a.min)) + '</b></td><td>' + obs.join(' ') + '</td>' +
+      '<td><button class="btn sm" type="button" data-act="ponto-editar-aula" data-e="' + esc(a.entrada.id) + '" data-s="' + esc(a.saida.id) + '">Corrigir</button></td></tr>';
+  }
+  function linhaPendentePonto(pd) {
+    const r = pd.reg;
+    return '<li class="aluno-turma-linha"><div><span class="tag tag-erro">' + (pd.motivo === 'sem saída' ? 'Esqueceu a saída' : 'Esqueceu a entrada') + '</span> ' +
+      esc(L.fmtCurta(L.dataLocal(r.em))) + ' · ' + (r.tipo === 'entrada' ? 'entrada ' : 'saída ') + '<b>' + esc(L.horaLocal(r.em)) + '</b>' + (r.turma ? (' · ' + esc(r.turma)) : '') + '</div>' +
+      '<div class="aluno-turma-acoes"><button class="btn sm on" type="button" data-act="ponto-completar" data-id="' + esc(r.id) + '">Completar</button>' +
+      '<button class="btn sm" type="button" data-act="ponto-excluir-batida" data-id="' + esc(r.id) + '">Apagar batida</button></div></li>';
+  }
+
+  function viewPonto() {
+    const per = periodoPontoAtual();
+    const topo = '<div class="topo"><h1>Ponto dos professores</h1></div>';
+    if (!Sync.configured()) {
+      return topo + '<p class="muted">O ponto digital precisa da sincronização com o Firebase ligada (veja o README).</p>';
+    }
+    garantirPontoOuvindo();
+    publicarConfigPontoSeMudou();
+    const link = linkPaginaPonto();
+    const nav = '<div class="filtros">' +
+      '<button class="btn sm" type="button" data-act="ponto-periodo" data-d="-1">← Período anterior</button>' +
+      '<button class="btn sm" type="button" data-act="ponto-periodo" data-d="0">Atual</button>' +
+      '<button class="btn sm" type="button" data-act="ponto-periodo" data-d="1">Próximo →</button>' +
+      '<span class="muted">Folha de <b>' + esc(nomeMes(per.competencia)) + '</b>: ' + esc(L.fmtCurta(per.ini)) + ' a ' + esc(L.fmtCurta(per.fim)) + '</span></div>';
+    let corpo;
+    if (V.pontoErro) corpo = '<p class="login-erro">' + esc(V.pontoErro) + '</p>';
+    else if (!V.pontoRegs) corpo = '<p class="muted">Carregando as batidas…</p>';
+    else {
+      const grupos = pontoPorProfessor();
+      const ids = Object.keys(grupos).sort(function (a, b) { return L.norm(grupos[a].profNome).localeCompare(L.norm(grupos[b].profNome)); });
+      const semBatida = S.professores.filter(function (p) { return !grupos[L.pontoSlug(p.nome)]; }).map(function (p) { return p.nome; });
+      const totalPend = ids.reduce(function (s, id) { return s + grupos[id].pendentes.length; }, 0);
+      const totalAulas = ids.reduce(function (s, id) { return s + grupos[id].aulas.length; }, 0);
+      corpo = '<div class="stats-topo">' +
+        '<div class="stat-tile"><b>' + totalAulas + '</b><span>aula(s) batida(s) no período</span></div>' +
+        '<div class="stat-tile"><b>' + totalPend + '</b><span>pendência(s) pra corrigir</span></div>' +
+        '</div>' +
+        (ids.length ? '' : '<p class="muted">Nenhuma batida neste período ainda.</p>') +
+        ids.map(function (id) {
+          const g = grupos[id];
+          const prof = professorPorPontoId(id);
+          const valorHora = prof && prof.valorHoraAula ? Number(normalizarValorMoeda(prof.valorHoraAula)) : NaN;
+          const horasDec = Math.round(g.totalMin / 60 * 100) / 100;
+          const lancado = prof ? S.horasAula.find(function (h) { return L.norm(h.professor) === L.norm(prof.nome) && mesDeData(h.semana) === per.competencia; }) : null;
+          const jaLancadoIgual = lancado && Number(normalizarValorMoeda(lancado.horas)) === horasDec;
+          return '<section class="bloco">' +
+            '<div class="ct-topo"><b>' + esc(prof ? prof.nome : g.profNome) + '</b>' +
+            '<span class="tag tag-ok">' + esc(L.fmtHM(g.totalMin)) + ' · ' + g.aulas.length + ' aula(s)</span>' +
+            (!isNaN(valorHora) && g.totalMin ? ('<span class="tag tag-neutro">a pagar ' + esc(fmtReais(horasDec * valorHora)) + '</span>') : '') +
+            (g.pendentes.length ? ('<span class="tag tag-erro">' + g.pendentes.length + ' pendência(s)</span>') : '') +
+            (g.emAula.length ? '<span class="tag tag-aviso">em aula agora</span>' : '') +
+            '</div>' +
+            (g.pendentes.length ? ('<ul class="lista-alunos">' + g.pendentes.map(linhaPendentePonto).join('') + '</ul>') : '') +
+            (g.aulas.length ? ('<div style="overflow-x:auto"><table class="tabela"><thead><tr><th>Data</th><th>Turma</th><th>Entrada</th><th>Saída</th><th>Tempo</th><th>Observação</th><th></th></tr></thead><tbody>' +
+              g.aulas.slice().reverse().map(linhaAulaPonto).join('') + '</tbody></table></div>') : '') +
+            '<div class="ct-acoes">' +
+            (!g.totalMin ? '<span class="muted">Nada pra lançar ainda — complete as pendências.</span>' : prof ? ('<button class="btn sm' + (jaLancadoIgual ? ' on-ok' : ' on') + '" type="button" data-act="ponto-lancar-horas" data-prof="' + esc(prof.nome) + '" data-horas="' + horasDec + '" data-mes="' + per.competencia + '"' + (g.pendentes.length ? ' title="Ainda tem pendência — corrija antes, senão o total fica menor."' : '') + '>' +
+              (jaLancadoIgual ? ('✓ Lançado em Horas-aula de ' + esc(nomeMes(per.competencia))) : ('Lançar ' + String(horasDec).replace('.', ',') + 'h em Horas-aula de ' + esc(nomeMes(per.competencia)))) + '</button>') :
+              '<span class="muted">Esse nome não está mais em Professores — cadastre de novo pra lançar as horas.</span>') +
+            '</div>' +
+            '</section>';
+        }).join('') +
+        (semBatida.length ? ('<p class="muted">Sem nenhuma batida neste período: ' + esc(semBatida.join(', ')) + '.</p>') : '');
+    }
+    const m = V.pontoManual;
+    const profsOrd = S.professores.slice().sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
+    const manual = '<section class="bloco"><h2>Lançar aula à mão</h2>' +
+      '<p class="muted">Pra quando o professor não conseguiu bater (celular sem bateria, internet fora etc.).</p>' +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Professor</label><select data-act="pm-prof"><option value="">Selecione…</option>' + profsOrd.map(function (p) { const id = L.pontoSlug(p.nome); return '<option value="' + esc(id) + '"' + (m.profId === id ? ' selected' : '') + '>' + esc(p.nome) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="campo"><label>Data</label><input type="date" data-act="pm-data" value="' + esc(m.data) + '"></div>' +
+      '<div class="campo"><label>Entrada</label><input type="time" data-act="pm-entrada" value="' + esc(m.entrada) + '"></div>' +
+      '<div class="campo"><label>Saída</label><input type="time" data-act="pm-saida" value="' + esc(m.saida) + '"></div>' +
+      '<div class="campo"><label>Turma</label><input type="text" data-act="pm-turma" value="' + esc(m.turma) + '" placeholder="Ex.: Prime 2"></div>' +
+      '</div><button class="btn on" type="button" data-act="ponto-add-manual">Lançar aula</button></section>';
+    const pins = V.pontoPins;
+    const config = '<section class="bloco"><h2>Página do ponto e PINs</h2>' +
+      '<p class="muted">Os professores abrem este link (pelo QR code na parede), escolhem o nome, digitam o PIN, escolhem a turma e tocam em Entrada ou Saída. O horário é o do servidor.</p>' +
+      '<div class="ct-acoes"><a class="btn sm" target="_blank" rel="noopener" href="' + esc(link) + '">Abrir página do ponto</a>' +
+      '<button class="btn sm" type="button" data-act="ponto-copiar-link">Copiar link</button>' +
+      '<button class="btn sm on" type="button" data-act="ponto-imprimir-qr">Imprimir QR code</button></div>' +
+      '<div class="campos-matricula" style="margin-top:0.8rem"><div class="campo"><label>Dia do fechamento da folha</label><input type="text" inputmode="numeric" data-act="ponto-dia-corte" value="' + esc(String(diaCortePonto())) + '" placeholder="20"></div></div>' +
+      '<p class="muted">Período vai do dia seguinte ao fechamento até o dia do fechamento no mês seguinte (hoje: 21 a 20).</p>' +
+      '<h4>PIN de cada professor (4 dígitos)</h4>' +
+      (pins ? ('<div class="campos-matricula">' + profsOrd.map(function (p) {
+        const id = L.pontoSlug(p.nome);
+        return '<div class="campo"><label>' + esc(p.nome) + '</label><input type="text" inputmode="numeric" maxlength="4" data-act="ponto-pin" data-id="' + esc(id) + '" value="' + esc(pins[id] || '') + '" placeholder="sem PIN"></div>';
+      }).join('') + '</div><button class="btn sm on" type="button" data-act="ponto-salvar-pins">Salvar PINs</button>' +
+        '<p class="muted">Professor sem PIN não consegue bater ponto. Combine o PIN com cada um no particular.</p>') :
+        ('<button class="btn sm" type="button" data-act="ponto-carregar-pins"' + (V.pontoPinsCarregando ? ' disabled' : '') + '>' + (V.pontoPinsCarregando ? 'Carregando…' : 'Ver e editar PINs') + '</button>')) +
+      '</section>';
+    return topo + nav + corpo + manual + config;
+  }
+
+  function dlgCorrigirAula(entradaId, saidaId) {
+    const e = (V.pontoRegs || []).find(function (r) { return r.id === entradaId; });
+    const s = (V.pontoRegs || []).find(function (r) { return r.id === saidaId; });
+    if (!e || !s) return;
+    abrirDlg('<article class="dlg-card"><header><h2>Corrigir aula — ' + esc(e.profNome || '') + '</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header>' +
+      '<div class="dlg-corpo">' +
+      '<p class="muted">' + esc(L.fmtLonga(L.dataLocal(e.em))) + ' · ' + esc(e.turma || '') + '</p>' +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label>Entrada</label><input type="time" id="pc-entrada" value="' + esc(L.horaLocal(e.em)) + '"></div>' +
+      '<div class="campo"><label>Saída</label><input type="time" id="pc-saida" value="' + esc(L.horaLocal(s.em)) + '"></div>' +
+      '<div class="campo"><label>Turma</label><input type="text" id="pc-turma" value="' + esc(e.turma || '') + '"></div>' +
+      '</div>' +
+      '<div class="ct-acoes"><button class="btn sm on" type="button" data-act="ponto-salvar-aula" data-e="' + esc(e.id) + '" data-s="' + esc(s.id) + '">Salvar</button>' +
+      '<button class="btn sm" type="button" data-act="ponto-apagar-aula" data-e="' + esc(e.id) + '" data-s="' + esc(s.id) + '">Apagar esta aula</button></div>' +
+      '</div></article>');
+  }
+  function dlgCompletarBatida(id) {
+    const r = (V.pontoRegs || []).find(function (x) { return x.id === id; });
+    if (!r) return;
+    const falta = r.tipo === 'entrada' ? 'saída' : 'entrada';
+    abrirDlg('<article class="dlg-card"><header><h2>Completar ' + falta + ' — ' + esc(r.profNome || '') + '</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header>' +
+      '<div class="dlg-corpo">' +
+      '<p class="muted">' + esc(L.fmtLonga(L.dataLocal(r.em))) + ' · ' + (r.tipo === 'entrada' ? 'entrou' : 'saiu') + ' às <b>' + esc(L.horaLocal(r.em)) + '</b>' + (r.turma ? (' · ' + esc(r.turma)) : '') + '</p>' +
+      '<div class="campo"><label>Horário da ' + falta + '</label><input type="time" id="pc-hora"></div>' +
+      '<div class="ct-acoes"><button class="btn sm on" type="button" data-act="ponto-salvar-completar" data-id="' + esc(r.id) + '">Salvar</button></div>' +
+      '</div></article>');
+  }
+  function imprimirQrPonto() {
+    const link = linkPaginaPonto();
+    const w = window.open('', '_blank');
+    if (!w) { toast('O navegador bloqueou a janela. Libere pop-ups pra este site.'); return; }
+    w.document.write('<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><title>Ponto · Washington Ilha</title>' +
+      '<style>body{font-family:system-ui,sans-serif;text-align:center;padding:2rem;color:#0a2f4b}h1{font-size:2.2rem;margin:.2rem 0}#qr{display:inline-block;margin:1.5rem auto}p{font-size:1.15rem;max-width:30rem;margin:.6rem auto}small{color:#555;word-break:break-all}</style></head><body>' +
+      '<h1>Ponto dos professores</h1><p>Aponte a câmera do celular, escolha seu nome, digite seu PIN e toque em <b>Entrada</b> ao chegar e <b>Saída</b> ao sair.</p>' +
+      '<div id="qr"></div><p><small>' + esc(link) + '</small></p>' +
+      '<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"><\/script>' +
+      '<script>new QRCode(document.getElementById("qr"),{text:' + JSON.stringify(link) + ',width:320,height:320});setTimeout(function(){window.print();},800);<\/script>' +
+      '</body></html>');
+    w.document.close();
   }
 
   /* ---------- Ocorrências de professor (faltas/reposições/substituições): aba própria, separada
@@ -11802,6 +12209,115 @@ window.FIREBASE_CONFIG = {
       S.modelosComunicado = S.modelosComunicado.filter(function (x) { return x.id !== m.id; });
       LS.set('modelosComunicado', S.modelosComunicado);
       registrar('Excluiu modelo de comunicado', m.nome);
+      render();
+    },
+    /* ---- Ponto digital ---- */
+    'ponto-periodo': function (el) { const d = Number(el.dataset.d); V.pontoDesloc = d === 0 ? 0 : V.pontoDesloc + d; render(); },
+    'ponto-copiar-link': function () { copiar(linkPaginaPonto()); },
+    'ponto-imprimir-qr': function () { imprimirQrPonto(); },
+    'ponto-dia-corte': function (el) {
+      const n = parseInt(el.value, 10);
+      if (!(n >= 1 && n <= 28)) return;
+      if (n === diaCortePonto()) return;
+      S.cfg.pontoDiaCorte = n; LS.set('cfg', S.cfg);
+      registrar('Mudou o dia de fechamento do ponto', 'dia ' + n);
+      pontoOuvindoChave = ''; render();
+    },
+    'ponto-carregar-pins': function () {
+      V.pontoPinsCarregando = true; render();
+      Sync.pontoLerPins().then(function (pins) { V.pontoPins = pins; V.pontoPinsCarregando = false; render(); },
+        function () { V.pontoPinsCarregando = false; toast('Não consegui ler os PINs. Confira as regras do Firebase (README).'); render(); });
+    },
+    'ponto-pin': function (el) { V.pontoPins[el.dataset.id] = el.value.replace(/\D/g, '').slice(0, 4); },
+    'ponto-salvar-pins': function () {
+      const pins = V.pontoPins || {};
+      const invalidos = Object.keys(pins).filter(function (id) { return pins[id] && pins[id].length !== 4; });
+      if (invalidos.length) { toast('Cada PIN precisa ter exatamente 4 números.'); return; }
+      const ids = S.professores.map(function (p) { return L.pontoSlug(p.nome); });
+      Promise.all(ids.map(function (id) { return Sync.pontoSalvarPin(id, pins[id] || ''); })).then(function () {
+        registrar('Atualizou os PINs do ponto', '');
+        publicarConfigPontoSeMudou();
+        toast('PINs salvos.');
+      }, function () { toast('Não consegui salvar os PINs. Confira as regras do Firebase (README).'); });
+    },
+    'pm-prof': function (el) { V.pontoManual.profId = el.value; },
+    'pm-data': function (el) { V.pontoManual.data = el.value; },
+    'pm-entrada': function (el) { V.pontoManual.entrada = el.value; },
+    'pm-saida': function (el) { V.pontoManual.saida = el.value; },
+    'pm-turma': function (el) { V.pontoManual.turma = el.value; },
+    'ponto-add-manual': function () {
+      const m = V.pontoManual;
+      const prof = professorPorPontoId(m.profId);
+      if (!prof) { toast('Escolha o professor.'); return; }
+      if (!m.data || !horaValida(m.entrada) || !horaValida(m.saida)) { toast('Preencha data, entrada e saída.'); return; }
+      const e = msDe(m.data, hhmm(m.entrada)), s = msDe(m.data, hhmm(m.saida));
+      if (s <= e) { toast('A saída precisa ser depois da entrada.'); return; }
+      const autor = autorAtual();
+      const base = { profId: m.profId, profNome: prof.nome, turma: m.turma || '', turmaId: '', autor: autor };
+      Promise.all([
+        Sync.pontoCriarManual(Object.assign({}, base, { tipo: 'entrada', em: e })),
+        Sync.pontoCriarManual(Object.assign({}, base, { tipo: 'saida', em: s })),
+      ]).then(function () {
+        registrar('Lançou aula à mão no ponto', prof.nome + ' · ' + L.fmtCurta(m.data) + ' ' + m.entrada + '–' + m.saida);
+        V.pontoManual = { profId: '', data: HOJE, entrada: '', saida: '', turma: '' };
+        toast('Aula lançada.'); render();
+      }, function () { toast('Não consegui salvar. Confira a internet.'); });
+    },
+    'ponto-editar-aula': function (el) { dlgCorrigirAula(el.dataset.e, el.dataset.s); },
+    'ponto-salvar-aula': function (el) {
+      const e = (V.pontoRegs || []).find(function (r) { return r.id === el.dataset.e; });
+      const s = (V.pontoRegs || []).find(function (r) { return r.id === el.dataset.s; });
+      if (!e || !s) return;
+      const he = $('#pc-entrada').value, hs = $('#pc-saida').value, turma = $('#pc-turma').value;
+      if (!horaValida(he) || !horaValida(hs)) { toast('Preencha entrada e saída.'); return; }
+      const dia = L.dataLocal(e.em);
+      const emE = msDe(dia, hhmm(he)), emS = msDe(dia, hhmm(hs));
+      if (emS <= emE) { toast('A saída precisa ser depois da entrada.'); return; }
+      const autor = autorAtual();
+      const mudaE = emE !== e.em || turma !== (e.turma || ''), mudaS = emS !== s.em;
+      Promise.all([
+        mudaE ? Sync.pontoAtualizar(e.id, Object.assign({ em: emE, turma: turma, manual: true, autor: autor }, turma !== (e.turma || '') ? { turmaId: '' } : {})) : null,
+        mudaS ? Sync.pontoAtualizar(s.id, { em: emS, manual: true, autor: autor }) : null,
+      ]).then(function () {
+        registrar('Corrigiu aula no ponto', (e.profNome || '') + ' · ' + L.fmtCurta(dia) + ' ' + he + '–' + hs);
+        fecharDlg(); toast('Aula corrigida.');
+      }, function () { toast('Não consegui salvar. Confira a internet.'); });
+    },
+    'ponto-apagar-aula': function (el) {
+      if (!confirm('Apagar esta aula (entrada e saída)?')) return;
+      Promise.all([Sync.pontoExcluir(el.dataset.e), Sync.pontoExcluir(el.dataset.s)]).then(function () {
+        registrar('Apagou aula do ponto', '');
+        fecharDlg(); toast('Aula apagada.');
+      }, function () { toast('Não consegui apagar. Confira a internet.'); });
+    },
+    'ponto-completar': function (el) { dlgCompletarBatida(el.dataset.id); },
+    'ponto-salvar-completar': function (el) {
+      const r = (V.pontoRegs || []).find(function (x) { return x.id === el.dataset.id; });
+      if (!r) return;
+      const h = $('#pc-hora').value;
+      if (!horaValida(h)) { toast('Informe o horário.'); return; }
+      const em = msDe(L.dataLocal(r.em), hhmm(h));
+      const tipo = r.tipo === 'entrada' ? 'saida' : 'entrada';
+      if ((tipo === 'saida' && em <= r.em) || (tipo === 'entrada' && em >= r.em)) { toast(tipo === 'saida' ? 'A saída precisa ser depois da entrada.' : 'A entrada precisa ser antes da saída.'); return; }
+      Sync.pontoCriarManual({ profId: r.profId, profNome: r.profNome || '', turma: r.turma || '', turmaId: r.turmaId || '', tipo: tipo, em: em, autor: autorAtual() }).then(function () {
+        registrar('Completou batida no ponto', (r.profNome || '') + ' · ' + L.fmtCurta(L.dataLocal(r.em)) + ' ' + (tipo === 'saida' ? 'saída' : 'entrada') + ' ' + h);
+        fecharDlg(); toast('Batida completada.');
+      }, function () { toast('Não consegui salvar. Confira a internet.'); });
+    },
+    'ponto-excluir-batida': function (el) {
+      if (!confirm('Apagar esta batida?')) return;
+      Sync.pontoExcluir(el.dataset.id).then(function () { registrar('Apagou batida do ponto', ''); toast('Batida apagada.'); },
+        function () { toast('Não consegui apagar. Confira a internet.'); });
+    },
+    'ponto-lancar-horas': function (el) {
+      const prof = el.dataset.prof, mes = el.dataset.mes, horas = String(el.dataset.horas);
+      const anterior = S.horasAula.find(function (h) { return L.norm(h.professor) === L.norm(prof) && mesDeData(h.semana) === mes; });
+      if (anterior && String(normalizarValorMoeda(anterior.horas)) !== horas && !confirm('Já tem ' + anterior.horas + 'h lançadas para ' + prof + ' em ' + nomeMes(mes) + '. Trocar por ' + horas.replace('.', ',') + 'h do ponto?')) return;
+      S.horasAula = S.horasAula.filter(function (h) { return !(L.norm(h.professor) === L.norm(prof) && mesDeData(h.semana) === mes); });
+      S.horasAula.push({ id: proxId('ha', S.horasAula), professor: prof, semana: mes + '-01', horas: horas, origem: 'ponto' });
+      LS.set('horasAula', S.horasAula);
+      registrar('Lançou horas-aula do ponto', prof + ' · ' + nomeMes(mes) + ' · ' + horas + 'h');
+      toast('Horas lançadas em Professores.');
       render();
     },
     /* ---- Login ---- */
