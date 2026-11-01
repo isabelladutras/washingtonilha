@@ -262,3 +262,15 @@ body.tela-login .rail { display: none; }
   h1 { font-size: 1.5rem; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* Importar relatório do Asaas (botão de arquivo) e histórico de atualizações das pendências */
+.btn-arquivo { position: relative; cursor: pointer; }
+.btn-arquivo input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; }
+.btn-arquivo:focus-within { outline: 2px solid var(--brand-strong); outline-offset: 2px; }
+.pend-detalhe { flex-basis: 100%; display: grid; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--line-2); }
+.pend-contexto { white-space: pre-wrap; font-size: 0.85rem; background: var(--brand-soft); border-radius: 8px; padding: 0.55rem 0.7rem; }
+.pend-historico { list-style: none; margin: 0; padding: 0 0 0 0.8rem; border-left: 2px solid var(--line); display: grid; gap: 0.5rem; font-size: 0.86rem; }
+.pend-historico .muted { font-size: 0.78rem; }
+.pend-texto { white-space: pre-wrap; }
+.pend-nova-upd { display: grid; gap: 0.4rem; }
+.pend-nova-upd textarea { width: 100%; font: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 0.45rem 0.6rem; resize: vertical; }
+.pend-nova-upd .btn { justify-self: start; }

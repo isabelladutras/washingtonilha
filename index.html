@@ -293,6 +293,18 @@ body.tela-login .rail { display: none; }
   h1 { font-size: 1.5rem; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+/* Importar relatório do Asaas (botão de arquivo) e histórico de atualizações das pendências */
+.btn-arquivo { position: relative; cursor: pointer; }
+.btn-arquivo input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; }
+.btn-arquivo:focus-within { outline: 2px solid var(--brand-strong); outline-offset: 2px; }
+.pend-detalhe { flex-basis: 100%; display: grid; gap: 0.5rem; padding-top: 0.5rem; border-top: 1px solid var(--line-2); }
+.pend-contexto { white-space: pre-wrap; font-size: 0.85rem; background: var(--brand-soft); border-radius: 8px; padding: 0.55rem 0.7rem; }
+.pend-historico { list-style: none; margin: 0; padding: 0 0 0 0.8rem; border-left: 2px solid var(--line); display: grid; gap: 0.5rem; font-size: 0.86rem; }
+.pend-historico .muted { font-size: 0.78rem; }
+.pend-texto { white-space: pre-wrap; }
+.pend-nova-upd { display: grid; gap: 0.4rem; }
+.pend-nova-upd textarea { width: 100%; font: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 0.45rem 0.6rem; resize: vertical; }
+.pend-nova-upd .btn { justify-self: start; }
 
 </style>
 <script>
@@ -8717,7 +8729,214 @@ window.FIREBASE_CONFIG = {
     };
   }
 
+  /* ---------- Relatório de cobranças do Asaas (.xlsx ou .csv) → entradas, situação e pendências ----------
+     O app.js lê a planilha (com a biblioteca SheetJS) e entrega aqui uma lista de objetos com as
+     colunas do Asaas. Tudo daqui pra baixo é cálculo puro (sem tela), pra poder ser testado. */
+  function asaasData(v) {
+    if (v == null || v === '') return '';
+    if (typeof v === 'number') return new Date(Math.round((v - 25569) * 864e5)).toISOString().slice(0, 10);
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    const s = String(v).trim();
+    let m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);
+    if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+    m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    return m ? m[0] : '';
+  }
+  function asaasNumero(v) {
+    if (typeof v === 'number') return v;
+    const s = String(v == null ? '' : v).replace(/[R$\s]/g, '');
+    if (!s) return 0;
+    return (s.indexOf(',') > -1 ? parseFloat(s.replace(/\./g, '').replace(',', '.')) : parseFloat(s)) || 0;
+  }
+  /** Linhas cruas (objetos {cabeçalho: valor}) → lista padronizada de cobranças. */
+  function asaasLinhas(rows) {
+    function pega(r, nomes) {
+      const ks = Object.keys(r);
+      for (let i = 0; i < ks.length; i++) if (nomes.indexOf(norm(ks[i])) > -1) return r[ks[i]];
+      return '';
+    }
+    return (rows || []).map(function (r) {
+      return {
+        ident: String(pega(r, ['identificador', 'id']) || '').replace(/\.0$/, '').trim(),
+        nome: String(pega(r, ['nome', 'cliente', 'nome do cliente', 'pagador']) || '').trim(),
+        celular: String(pega(r, ['celular', 'fone', 'telefone']) || '').trim(),
+        vencimento: asaasData(pega(r, ['vencimento', 'data de vencimento'])),
+        vencimentoOriginal: asaasData(pega(r, ['vencimento original'])),
+        pagamento: asaasData(pega(r, ['data de pagamento', 'data do pagamento'])),
+        valor: asaasNumero(pega(r, ['valor', 'valor (r$)'])),
+        status: String(pega(r, ['situacao', 'status']) || '').trim(),
+        descricao: String(pega(r, ['descricao', 'historico', 'referencia']) || '').trim(),
+        forma: String(pega(r, ['forma de pagamento']) || '').trim(),
+      };
+    }).filter(function (l) { return l.nome && l.status; });
+  }
+  const ASAAS_STOP = ['mensalidade', 'mensalide', 'mennsalidade', 'academia', 'acdemia', 'washington', 'washigton', 'material', 'fluent', 'de', 'da', 'do', 'dos', 'das', 'e', 'descricao', 'nao', 'informada', 'matricula'];
+  function tokensNome(s) { return norm(s).replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function (w) { return w.length > 1 && ASAAS_STOP.indexOf(w) < 0; }); }
+  /** Melhor aluno para um nome (score = palavras em comum, exigindo o 1º nome igual). Só devolve se for único. */
+  function melhorAlunoPorNome(nome, alunos) {
+    const tk = tokensNome(nome);
+    if (!tk.length) return null;
+    let melhor = 0, achados = [];
+    alunos.forEach(function (a) {
+      const ta = tokensNome(a.nome);
+      if (!ta.length || ta[0] !== tk[0]) return;
+      const comum = tk.filter(function (w) { return ta.indexOf(w) > -1; }).length;
+      // Precisa bater pelo menos 3 palavras, ou todas as do nome mais curto (ex.: cadastro só "Adenilton",
+      // descrição só "Miguel Ferreira"). Evita casar "Ana Carolina de Oliveira" com "Ana Paula de Oliveira".
+      const ok = comum >= Math.min(3, ta.length, tk.length);
+      if (!ok) return;
+      if (comum > melhor) { melhor = comum; achados = [a]; } else if (comum === melhor) achados.push(a);
+    });
+    return achados.length === 1 ? achados[0] : null;
+  }
+  /** Acha o aluno de uma cobrança: nome igual, responsável financeiro, nome do aluno na descrição, ou nome parecido. */
+  function asaasCasarAluno(l, alunos) {
+    const ativos = (alunos || []).filter(function (a) { return a && a.nome; });
+    const key = norm(l.nome);
+    let a = ativos.find(function (x) { return norm(x.nome) === key; });
+    if (a) return { aluno: a, como: 'nome' };
+    a = ativos.find(function (x) { return x.responsavelFinanceiro && norm(x.responsavelFinanceiro) === key; });
+    if (a) return { aluno: a, como: 'responsavel' };
+    const desc = l.descricao || '';
+    const depoisTraco = desc.indexOf('-') > -1 ? desc.slice(desc.indexOf('-') + 1) : '';
+    if (depoisTraco.trim()) { a = melhorAlunoPorNome(depoisTraco, ativos); if (a) return { aluno: a, como: 'descricao' }; }
+    const descN = norm(desc);
+    if (descN) { a = ativos.find(function (x) { return norm(x.nome).split(' ').length >= 2 && descN.indexOf(norm(x.nome)) > -1; }); if (a) return { aluno: a, como: 'descricao' }; }
+    if (tokensNome(desc).length >= 2) { a = melhorAlunoPorNome(desc, ativos); if (a) return { aluno: a, como: 'descricao' }; }
+    a = melhorAlunoPorNome(l.nome, ativos);
+    if (a) return { aluno: a, como: 'parecido' };
+    return null;
+  }
+  function asaasTipo(desc) { const d = norm(desc); if (d.indexOf('material') > -1) return 'Material'; if (/mens?al|mennsal/.test(d)) return 'Mensalidade'; if (d.indexOf('matricula') > -1) return 'Matrícula'; return ''; }
+  function asaasSemDescricao(desc) { const d = norm(desc).replace(/[^a-z ]/g, '').trim(); return !d || d === 'descricao nao informada' || d === 'academia washington'; }
+  function asaasForma(f) { const n = norm(f); if (n.indexOf('pix') > -1) return 'Pix'; if (n.indexOf('boleto') > -1) return 'Boleto'; if (n.indexOf('debito') > -1) return 'Cartão de débito'; if (n.indexOf('cartao') > -1 || n.indexOf('credito') > -1) return 'Cartão de crédito'; if (n.indexOf('dinheiro') > -1) return 'Dinheiro'; if (n.indexOf('transfer') > -1) return 'Transferência'; return 'Boleto'; }
+  const MESES_CURTOS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  function mesCurto(iso) { return iso ? (MESES_CURTOS[Number(iso.slice(5, 7)) - 1] + '/' + iso.slice(0, 4)) : ''; }
+  function brl(v) { return 'R$ ' + (Number(v) || 0).toFixed(2).replace('.', ','); }
+  function dm(iso) { return iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) : ''; }
+  /**
+   * Monta o plano de importação sem mexer em nada. `estado` = { alunos, entradas, pendencias }.
+   * Devolve { entradas: [novas], repetidas, situacao: {alunoId: {...}}, pendencias: [novas],
+   *           resolver: [{id, texto}], semAluno, contagem }.
+   */
+  function asaasPlano(linhas, estado) {
+    const alunos = estado.alunos || [], entradas = estado.entradas || [], pends = estado.pendencias || [];
+    const pagas = [], abertas = [];
+    linhas.forEach(function (l) {
+      const st = statusPagamento(l.status);
+      if (st === 'em dia') pagas.push(l); else if (st === 'atrasado' || st === 'pendente') abertas.push(l);
+    });
+    const jaImportadas = {}; entradas.forEach(function (e) { if (e.asaasId) jaImportadas[e.asaasId] = true; });
+    const chavesPend = {}; pends.forEach(function (p) { if (p.chave) chavesPend[p.chave] = p; });
+    const plano = { entradas: [], repetidas: 0, manuais: 0, situacao: {}, pendencias: [], resolver: [], contagem: { pagas: pagas.length, abertas: abertas.length, valorPago: 0, valorAberto: 0 } };
+    const casados = {}, conferirPorPagador = {};
+    function casar(l) { const k = l.ident || (l.nome + l.valor + l.vencimento); if (!(k in casados)) casados[k] = asaasCasarAluno(l, alunos); return casados[k]; }
+    // 1) Recebidas → entradas
+    pagas.forEach(function (l) {
+      plano.contagem.valorPago += l.valor;
+      if (l.ident && jaImportadas[l.ident]) { plano.repetidas++; return; }
+      const c = casar(l), a = c && c.aluno;
+      const data = l.pagamento || l.vencimento;
+      // Já lançada à mão? (mesmo aluno/nome, mesmo valor, mesma data)
+      const manual = entradas.some(function (e) {
+        if (e.asaasId) return false;
+        const mesmoAluno = a ? e.alunoId === a.id : norm(e.alunoNome) === norm(l.nome);
+        return mesmoAluno && Math.abs(Number(String(e.valor).replace(',', '.')) - l.valor) < 0.01 && e.data === data;
+      });
+      if (manual) { plano.manuais++; return; }
+      const tipo = asaasTipo(l.descricao);
+      plano.entradas.push({
+        data: data, alunoId: a ? a.id : '', alunoNome: a ? a.nome : l.nome, valor: l.valor.toFixed(2), formaPagamento: asaasForma(l.forma),
+        referente: (tipo || 'Cobrança') + (l.vencimento ? (' · venc. ' + mesCurto(l.vencimento)) : ''),
+        obs: 'Asaas' + (a && norm(a.nome) !== norm(l.nome) ? (' · pago por ' + l.nome) : '') + (l.descricao && !asaasSemDescricao(l.descricao) ? (' · ' + l.descricao) : ''),
+        asaasId: l.ident,
+      });
+      if (!a || (asaasSemDescricao(l.descricao) && c.como === 'parecido')) {
+        const ja = pends.some(function (p) { return l.ident && (p.asaasIds || []).indexOf(l.ident) > -1; });
+        if (ja) return;
+        const linha = '• ' + brl(l.valor) + ' pago em ' + dm(l.pagamento) + ' (' + asaasForma(l.forma) + '), descrição no Asaas: ' + (asaasSemDescricao(l.descricao) ? 'nenhuma' : '"' + l.descricao + '"');
+        const k = norm(l.nome);
+        let p = conferirPorPagador[k];
+        if (!p) {
+          p = conferirPorPagador[k] = {
+            chave: 'asaas-conferir:' + (l.ident || k), categoria: 'cobranca', alunoId: a ? a.id : '',
+            texto: 'Conferir pagamento de ' + l.nome + ': de qual aluno e turma é?',
+            linhas: [], semDescricao: false, asaasIds: [],
+          };
+          plano.pendencias.push(p);
+        }
+        p.linhas.push(linha);
+        if (asaasSemDescricao(l.descricao)) p.semDescricao = true;
+        if (l.ident) p.asaasIds.push(l.ident);
+      }
+    });
+    // 2) Situação de pagamento por aluno (atrasado/pendente vence "em dia")
+    function marcar(a, status, l) {
+      const s = plano.situacao[a.id] || (plano.situacao[a.id] = { status: 'em dia', valorEmAberto: 0, obs: [] });
+      if (status === 'atrasado' || (status === 'pendente' && s.status === 'em dia')) s.status = status;
+      if (status !== 'em dia') s.valorEmAberto += l.valor;
+      s.obs.push(l.status + (l.vencimento ? (' venc. ' + dm(l.vencimento)) : '') + ' ' + brl(l.valor));
+    }
+    pagas.forEach(function (l) { const c = casar(l); if (c && c.aluno.formaPagamento !== 'unidade') marcar(c.aluno, 'em dia', l); });
+    // 3) Em aberto → situação do aluno + pendência de cobrança (uma por pagador)
+    const porPagador = {};
+    abertas.forEach(function (l) {
+      plano.contagem.valorAberto += l.valor;
+      const c = casar(l);
+      if (c && c.aluno.formaPagamento !== 'unidade') marcar(c.aluno, statusPagamento(l.status), l);
+      (porPagador[norm(l.nome)] = porPagador[norm(l.nome)] || []).push({ l: l, c: c });
+    });
+    Object.keys(porPagador).forEach(function (k) {
+      const itens = porPagador[k], l0 = itens[0].l;
+      const novos = itens.filter(function (it) { return !it.l.ident || !pends.some(function (p) { return (p.asaasIds || []).indexOf(it.l.ident) > -1; }); });
+      if (!novos.length) return;
+      const alunosNomes = Array.from(new Set(novos.map(function (it) { return it.c ? it.c.aluno.nome : ''; }).filter(Boolean)));
+      const total = novos.reduce(function (s, it) { return s + it.l.valor; }, 0);
+      plano.pendencias.push({
+        chave: 'asaas-aberto:' + novos.map(function (it) { return it.l.ident; }).join(','), categoria: 'cobranca',
+        alunoId: novos[0].c ? novos[0].c.aluno.id : '',
+        texto: 'Cobrar ' + l0.nome + ' · ' + brl(total) + ' em aberto' + (alunosNomes.length && norm(alunosNomes.join(' ')) !== norm(l0.nome) ? (' (' + alunosNomes.join(', ') + ')') : ''),
+        detalhe: novos.map(function (it) { return '• ' + (it.l.descricao || 'Sem descrição') + ': ' + brl(it.l.valor) + ', ' + it.l.status.toLowerCase() + ', venc. ' + dm(it.l.vencimento) + (it.l.vencimentoOriginal && it.l.vencimentoOriginal !== it.l.vencimento ? (' (era ' + dm(it.l.vencimentoOriginal) + ')') : ''); }).join('\n') +
+          (l0.celular ? ('\nCelular: ' + l0.celular) : '') + (alunosNomes.length ? '' : '\nAluno não identificado: descubra de quem é e preencha "Nome de quem paga no Asaas" na ficha do aluno.'),
+        asaasIds: novos.map(function (it) { return it.l.ident; }).filter(Boolean),
+      });
+    });
+    // 3b) Aluno que já saiu (cancelado no painel) mas continua sendo cobrado no Asaas
+    const canceladosVistos = {};
+    pagas.concat(abertas).forEach(function (l) {
+      const c = casar(l);
+      if (!c || !c.aluno.cancelado || canceladosVistos[c.aluno.id]) return;
+      const chave = 'asaas-cancelado:' + c.aluno.id + ':' + (l.vencimento || '').slice(0, 7);
+      if (chavesPend[chave]) return;
+      canceladosVistos[c.aluno.id] = true;
+      plano.pendencias.push({
+        chave: chave, categoria: 'cobranca', alunoId: c.aluno.id,
+        texto: c.aluno.nome + ' saiu da turma, mas ainda tem cobrança no Asaas',
+        detalhe: '• ' + (l.descricao || 'Cobrança') + ': ' + brl(l.valor) + ', ' + l.status.toLowerCase() + ', venc. ' + dm(l.vencimento) +
+          '\nCancelar a recorrência no Asaas e decidir o que fazer com o valor (estorno ou abatimento).',
+        asaasIds: l.ident ? [l.ident] : [],
+      });
+    });
+    // 4) Pendências de cobrança que agora aparecem pagas → resolver
+    const pagasPorId = {}; pagas.forEach(function (l) { if (l.ident) pagasPorId[l.ident] = l; });
+    pends.forEach(function (p) {
+      if (p.resolvida || p.categoria !== 'cobranca' || !(p.asaasIds || []).length || String(p.chave || '').indexOf('asaas-aberto:') !== 0) return;
+      const pagos = p.asaasIds.filter(function (id) { return pagasPorId[id]; });
+      if (pagos.length === p.asaasIds.length) plano.resolver.push({ id: p.id, texto: 'Pagamento confirmado no relatório do Asaas: ' + pagos.map(function (id) { return dm(pagasPorId[id].pagamento) + ' ' + brl(pagasPorId[id].valor); }).join('; ') + '.' });
+    });
+    Object.keys(conferirPorPagador).forEach(function (k) {
+      const p = conferirPorPagador[k];
+      p.detalhe = p.linhas.join('\n') + (p.semDescricao ? '\nInforme também se o valor é mensalidade, matrícula ou material.' : '') +
+        '\nQuando descobrir o aluno, preencha "Nome de quem paga no Asaas" na ficha dele: assim os próximos relatórios já reconhecem.';
+      delete p.linhas; delete p.semDescricao;
+    });
+    plano.contagem.valorPago = Math.round(plano.contagem.valorPago * 100) / 100;
+    plano.contagem.valorAberto = Math.round(plano.contagem.valorAberto * 100) / 100;
+    return plano;
+  }
+
   return {
+    asaasLinhas: asaasLinhas, asaasCasarAluno: asaasCasarAluno, asaasPlano: asaasPlano,
     pontoSlug: pontoSlug, fmtHM: fmtHM, dataLocal: dataLocal, horaLocal: horaLocal,
     periodoFechamento: periodoFechamento, parearPonto: parearPonto, compararComHorario: compararComHorario,
     DIAS_ORDEM: DIAS_ORDEM, DIAS_FULL: DIAS_FULL,
@@ -9115,7 +9334,7 @@ window.FIREBASE_CONFIG = {
     novaDespesa: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false, parcelado: false, parcelas: '' },
     novaDespesaUnifecaf: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false, parcelado: false, parcelas: '' },
     fMesEntradas: '', fMesDespesas: '', fMesDespesasUnifecaf: '',
-    novaPendencia: { texto: '', alunoId: '', turmaId: '', prazo: '' }, fPendencia: 'abertas',
+    novaPendencia: { texto: '', alunoId: '', turmaId: '', prazo: '' }, fPendencia: 'abertas', pendAbertas: {}, pendUpd: {}, planoAsaas: null, asaasLendo: false,
     novoComunicado: { mensagem: '', turmaIds: [], disponivelEm: '' },
     novoModeloComunicado: { nome: '', texto: '' },
     novoProfessor: { nome: '', telefone: '' },
@@ -9247,6 +9466,33 @@ window.FIREBASE_CONFIG = {
   }
   function abrirDlg(html) { const d = $('#dlg'); d.innerHTML = html; if (!d.open) { if (d.showModal) d.showModal(); else d.setAttribute('open', ''); } }
   function fecharDlg() { const d = $('#dlg'); if (d.open) { if (d.close) d.close(); else d.removeAttribute('open'); } }
+
+  /* ---------- Leitura de planilha (.xlsx/.csv) com SheetJS, carregado só quando precisa ---------- */
+  let xlsxCarregando = null;
+  function carregarXLSX() {
+    if (window.XLSX) return Promise.resolve(window.XLSX);
+    if (!xlsxCarregando) {
+      xlsxCarregando = new Promise(function (resolve, reject) {
+        const sc = document.createElement('script');
+        sc.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+        sc.onload = function () { resolve(window.XLSX); };
+        sc.onerror = function () { xlsxCarregando = null; reject(new Error('Não consegui carregar o leitor de planilhas. Confira a internet e tente de novo.')); };
+        document.head.appendChild(sc);
+      });
+    }
+    return xlsxCarregando;
+  }
+  function lerPlanilha(file) {
+    return carregarXLSX().then(function (X) {
+      return file.arrayBuffer().then(function (buf) {
+        const wb = X.read(buf, { type: 'array' });
+        const ws = wb.Sheets[wb.SheetNames[0]];
+        return X.utils.sheet_to_json(ws, { defval: '', raw: true });
+      });
+    });
+  }
+  /* Quem escreveu uma atualização: o e-mail do login (cada pessoa tem o seu) ou, sem login, o nome do registro. */
+  function autorAtualizacao() { return V.authEmail || autorAtual(); }
 
   /* ---------- Google Calendar "adicionar" (link direto, sem OAuth, sem sincronização de via dupla) ---------- */
   function linkGoogleCalendar(turma) {
@@ -10151,6 +10397,16 @@ window.FIREBASE_CONFIG = {
       '<td><button type="button" class="btn sm" data-act="excluir-entrada" data-id="' + e.id + '">Excluir</button></td>' +
       '</tr>';
   }
+  function botaoImportarAsaas() {
+    return '<label class="btn sm on btn-arquivo">' + (V.asaasLendo ? 'Lendo planilha…' : 'Importar relatório do Asaas') +
+      '<input type="file" accept=".xlsx,.xls,.csv" multiple data-act="importar-asaas"></label>';
+  }
+  function resumoUltimaImportacaoAsaas() {
+    const a = S.asaasImportado;
+    if (!a || !a.quando || a.entradas == null) return '';
+    return '<p class="muted">Última importação do Asaas: ' + esc(relTempo(a.quando)) + (a.autor ? (' por ' + esc(a.autor)) : '') + ' · ' + a.entradas + ' entrada(s) lançada(s)' +
+      (a.pendencias ? (' · ' + a.pendencias + ' caso(s) para conferir em <button type="button" class="link" data-act="ir-pendencias-cobranca">Pendências</button>') : '') + '</p>';
+  }
   function viewEntradas() {
     const ne = V.novaEntrada;
     const opcoesAluno = S.alunos.slice().sort(function (a, b) { return L.norm(a.nome).localeCompare(L.norm(b.nome)); });
@@ -10159,7 +10415,8 @@ window.FIREBASE_CONFIG = {
       .sort(function (a, b) { return (b.data || '').localeCompare(a.data || ''); });
     const total = lista.reduce(function (s, e) { const v = Number(normalizarValorMoeda(e.valor)); return s + (isNaN(v) ? 0 : v); }, 0);
     const despesasMesmoPeriodo = totalLista(S.despesas, V.fMesEntradas);
-    return '<div class="topo"><h1>Entradas</h1><div class="topo-acoes"><button class="btn sm" type="button" data-act="exportar-entradas-csv">Baixar CSV</button></div></div>' +
+    return '<div class="topo"><h1>Entradas</h1><div class="topo-acoes">' + botaoImportarAsaas() + '<button class="btn sm" type="button" data-act="exportar-entradas-csv">Baixar CSV</button></div></div>' +
+      resumoUltimaImportacaoAsaas() +
       '<section class="bloco">' +
       '<h2>Registrar entrada</h2>' +
       '<div class="campos-matricula">' +
@@ -10301,23 +10558,39 @@ window.FIREBASE_CONFIG = {
     const a = p.alunoId ? D.alunoPorId[p.alunoId] : null;
     const t = p.turmaId ? D.turmaPorId[p.turmaId] : null;
     const atrasada = !p.resolvida && p.prazo && p.prazo < HOJE;
+    const ups = p.atualizacoes || [];
+    const aberta = !!V.pendAbertas[p.id];
+    const ultima = ups[ups.length - 1];
     return '<div class="pendencia' + (p.resolvida ? ' resolvida' : '') + '">' +
       '<label class="check"><input type="checkbox" data-act="pendencia-toggle" data-id="' + p.id + '"' + (p.resolvida ? ' checked' : '') + '>' +
       '<span><b>' + esc(p.texto) + '</b>' +
       (a || t ? ('<div class="muted" style="font-size:.82rem">' + (a ? esc(a.nome) : '') + (a && t ? ' · ' : '') + (t ? esc(t.turma) : '') + '</div>') : '') +
+      (!aberta && ultima ? ('<div class="muted" style="font-size:.82rem">Última atualização: ' + esc(ultima.autor) + ', ' + esc(relTempo(ultima.ts)) + ' · ' + esc(ultima.texto.length > 80 ? ultima.texto.slice(0, 80) + '…' : ultima.texto) + '</div>') : '') +
       '</span></label>' +
+      (p.categoria === 'cobranca' ? '<span class="tag tag-aviso">Cobrança</span>' : '') +
       (p.prazo ? ('<span class="tag ' + (atrasada ? 'tag-erro' : 'tag-neutro') + '">prazo ' + esc(L.fmtCurta(p.prazo)) + '</span>') : '') +
+      '<button class="btn sm' + (aberta ? ' on' : '') + '" type="button" data-act="pend-abrir" data-id="' + p.id + '">' + (aberta ? 'Fechar' : 'Atualizações' + (ups.length ? (' (' + ups.length + ')') : '')) + '</button>' +
       '<button class="btn sm" type="button" data-act="excluir-pendencia" data-id="' + p.id + '">Excluir</button>' +
+      (aberta ? ('<div class="pend-detalhe">' +
+        (p.detalhe ? ('<div class="pend-contexto">' + esc(p.detalhe) + '</div>') : '') +
+        (ups.length ? ('<ul class="pend-historico">' + ups.map(function (u) {
+          return '<li><div class="muted"><b>' + esc(u.autor || 'Alguém') + '</b> · ' + esc(new Date(u.ts).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })) + '</div><div class="pend-texto">' + esc(u.texto) + '</div></li>';
+        }).join('') + '</ul>') : '<p class="muted" style="margin:.4rem 0">Ninguém registrou nada ainda.</p>') +
+        '<div class="pend-nova-upd"><textarea rows="2" data-act="pend-upd-texto" data-id="' + p.id + '" placeholder="O que foi feito ou descoberto? Ex.: Liguei para a mãe, a aluna é do Prime 2 de sábado.">' + esc(V.pendUpd[p.id] || '') + '</textarea>' +
+        '<button class="btn sm on" type="button" data-act="pend-add-upd" data-id="' + p.id + '">Registrar atualização</button></div>' +
+        '</div>') : '') +
       '</div>';
   }
   function viewPendencias() {
     const np = V.novaPendencia;
     let lista = S.pendencias.slice();
     if (V.fPendencia === 'abertas') lista = lista.filter(function (p) { return !p.resolvida; });
+    else if (V.fPendencia === 'cobranca') lista = lista.filter(function (p) { return !p.resolvida && p.categoria === 'cobranca'; });
     lista.sort(function (a, b) { return (a.prazo || '9999').localeCompare(b.prazo || '9999'); });
     const nAbertas = S.pendencias.filter(function (p) { return !p.resolvida; }).length;
+    const nCobranca = S.pendencias.filter(function (p) { return !p.resolvida && p.categoria === 'cobranca'; }).length;
     return '<div class="topo"><h1>Pendências</h1></div>' +
-      '<p class="muted">Use esta aba para anotar tudo o que precisa ser resolvido na unidade — documento faltando, aluno para ligar, contrato para assinar — para que nada passe batido.</p>' +
+      '<p class="muted">Use esta aba para anotar tudo o que precisa ser resolvido na unidade — documento faltando, aluno para ligar, contrato para assinar — para que nada passe batido. Em "Atualizações" cada pessoa registra o que fez; quem abrir depois vê o histórico.</p>' +
       '<section class="bloco">' +
       '<h2>Nova pendência</h2>' +
       '<div class="campo"><label>O que precisa ser feito</label><input type="text" data-act="pend-texto" value="' + esc(np.texto) + '" placeholder="Ex.: Pedir contrato assinado da Maria"></div>' +
@@ -10329,9 +10602,9 @@ window.FIREBASE_CONFIG = {
       '<button class="btn on" type="button" data-act="add-pendencia">Adicionar</button>' +
       '</section>' +
       '<div class="filtros">' +
-      '<select data-act="filtro-pendencia"><option value="abertas"' + (V.fPendencia === 'abertas' ? ' selected' : '') + '>Em aberto (' + nAbertas + ')</option><option value="todas"' + (V.fPendencia === 'todas' ? ' selected' : '') + '>Todas (' + S.pendencias.length + ')</option></select>' +
+      '<select data-act="filtro-pendencia"><option value="abertas"' + (V.fPendencia === 'abertas' ? ' selected' : '') + '>Em aberto (' + nAbertas + ')</option><option value="cobranca"' + (V.fPendencia === 'cobranca' ? ' selected' : '') + '>Cobranças em aberto (' + nCobranca + ')</option><option value="todas"' + (V.fPendencia === 'todas' ? ' selected' : '') + '>Todas (' + S.pendencias.length + ')</option></select>' +
       '</div>' +
-      (lista.length ? ('<div class="lista-pendencias">' + lista.map(linhaPendencia).join('') + '</div>') : '<p class="muted">Nenhuma pendência' + (V.fPendencia === 'abertas' ? ' em aberto' : '') + '.</p>');
+      (lista.length ? ('<div class="lista-pendencias">' + lista.map(linhaPendencia).join('') + '</div>') : '<p class="muted">Nenhuma pendência' + (V.fPendencia === 'abertas' ? ' em aberto' : V.fPendencia === 'cobranca' ? ' de cobrança em aberto' : '') + '.</p>');
   }
 
   /* ---------- Comunicados (mensagens em massa para alunos) ---------- */
@@ -11116,6 +11389,31 @@ window.FIREBASE_CONFIG = {
   }
 
   /* ---------- Dados ---------- */
+  function dlgPlanoAsaas(p, nomesArquivos) {
+    const c = p.contagem;
+    const totalEntradas = p.entradas.reduce(function (s, e) { return s + Number(e.valor); }, 0);
+    const semAluno = p.entradas.filter(function (e) { return !e.alunoId; }).length;
+    const sit = Object.keys(p.situacao).map(function (id) { return p.situacao[id]; });
+    const nAtras = sit.filter(function (x) { return x.status === 'atrasado'; }).length;
+    const nada = !p.entradas.length && !p.pendencias.length && !p.resolver.length && !sit.length;
+    abrirDlg('<article class="dlg-card"><header><h2>Importar relatório do Asaas</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header>' +
+      '<div class="dlg-corpo">' +
+      '<p class="muted">' + esc(nomesArquivos.join(', ')) + '</p>' +
+      '<p>' + c.pagas + ' cobrança(s) recebida(s) (' + esc(fmtReais(c.valorPago)) + ') e ' + c.abertas + ' em aberto (' + esc(fmtReais(c.valorAberto)) + ').</p>' +
+      '<ul class="lista-log">' +
+      '<li><b>' + p.entradas.length + '</b> lançamento(s) novo(s) em Entradas · ' + esc(fmtReais(totalEntradas)) + (semAluno ? (' · ' + semAluno + ' sem aluno identificado (entram com o nome de quem pagou)') : '') + '</li>' +
+      (p.repetidas ? ('<li>' + p.repetidas + ' já tinham sido importadas antes e ficam de fora</li>') : '') +
+      (p.manuais ? ('<li>' + p.manuais + ' já estavam lançadas à mão (mesmo aluno, valor e data) e ficam de fora</li>') : '') +
+      '<li><b>' + sit.length + '</b> aluno(s) com a situação de pagamento atualizada' + (nAtras ? (' · ' + nAtras + ' atrasado(s)') : '') + '</li>' +
+      '<li><b>' + p.pendencias.length + '</b> pendência(s) nova(s) para a equipe conferir</li>' +
+      (p.resolver.length ? ('<li><b>' + p.resolver.length + '</b> pendência(s) de cobrança fechada(s): o pagamento apareceu como recebido</li>') : '') +
+      '</ul>' +
+      (p.pendencias.length ? ('<h3 class="subtitulo">Pendências que vão ser criadas</h3><ul class="lista-log">' + p.pendencias.map(function (x) { return '<li>' + esc(x.texto) + '</li>'; }).join('') + '</ul>') : '') +
+      '<div class="acoes-linha" style="display:flex;gap:.5rem;flex-wrap:wrap;margin-top:1rem">' +
+      (nada ? '<p class="muted">Nada novo neste arquivo: tudo já tinha sido importado.</p>' : '<button class="btn on" type="button" data-act="confirmar-asaas">Confirmar importação</button>') +
+      '<button class="btn" type="button" data-act="fechar">Cancelar</button></div>' +
+      '</div></article>');
+  }
   function viewDados() {
     const asaas = S.asaasImportado;
     return '<div class="topo"><h1>Dados</h1></div>' +
@@ -11126,9 +11424,9 @@ window.FIREBASE_CONFIG = {
       '</section>' +
       '<section class="bloco">' +
       '<h2>Importar relatório do Asaas (pagamentos)</h2>' +
-      '<p class="muted">Exporte o relatório de cobranças do Asaas em CSV e importe aqui para atualizar a situação de pagamento dos alunos. O pareamento é feito pelo nome do cliente — confira os que não encontrarem correspondência.</p>' +
-      '<input type="file" accept=".csv,text/csv" data-act="importar-asaas">' +
-      (asaas ? ('<p class="muted">Última importação: ' + esc(asaas.quando ? relTempo(asaas.quando) : '') + ' · ' + asaas.atualizados + ' aluno(s) atualizados' + (asaas.semMatch && asaas.semMatch.length ? (', ' + asaas.semMatch.length + ' sem correspondência') : '') + '</p>') : '') +
+      '<p class="muted">Exporte o relatório de cobranças do Asaas (.xlsx ou .csv; pode ser o de recebidas, o de em aberto ou os dois juntos). As recebidas viram lançamentos em Entradas, a situação de pagamento de cada aluno é atualizada e o que precisa de conferência vira pendência, com histórico. Antes de gravar, o painel mostra um resumo para você confirmar.</p>' +
+      botaoImportarAsaas() +
+      (asaas ? ('<p class="muted">Última importação: ' + esc(asaas.quando ? relTempo(asaas.quando) : '') + ' · ' + (asaas.atualizados || 0) + ' aluno(s) atualizados' + (asaas.entradas != null ? (' · ' + asaas.entradas + ' entrada(s)') : '') + (asaas.pendencias ? (' · ' + asaas.pendencias + ' pendência(s)') : '') + (asaas.semMatch && asaas.semMatch.length ? (', ' + asaas.semMatch.length + ' sem correspondência') : '') + '</p>') : '') +
       '</section>' +
       '<section class="bloco">' +
       '<h2>Telefones</h2>' +
@@ -11563,43 +11861,59 @@ window.FIREBASE_CONFIG = {
       toast('data.js baixado');
     },
     'importar-asaas': function (el) {
-      const file = el.files && el.files[0];
-      if (!file) return;
-      const reader = new FileReader();
-      reader.onload = function () {
-        const linhas = L.parseAsaasCSV(String(reader.result));
-        let atualizados = 0; const semMatch = [];
-        linhas.forEach(function (l) {
-          const key = L.norm(l.nome);
-          const descNorm = l.descricao ? L.norm(l.descricao) : '';
-          // 1) nome do aluno bate direto com o nome no boleto (caso raro, mas ideal);
-          // 2) o boleto está no nome do responsável financeiro cadastrado na ficha do aluno
-          //    (ex.: boleto no nome do pai/mãe — é o caso mais comum no Asaas);
-          // 3) o nome do aluno aparece dentro da descrição/histórico do boleto (quando o Asaas
-          //    exporta essa coluna e o nome do aluno foi escrito lá).
-          let aluno = S.alunos.find(function (a) { return L.norm(a.nome) === key; });
-          if (!aluno) aluno = S.alunos.find(function (a) { return a.responsavelFinanceiro && L.norm(a.responsavelFinanceiro) === key; });
-          if (!aluno && descNorm) aluno = S.alunos.find(function (a) { return a.nome && descNorm.indexOf(L.norm(a.nome)) > -1; });
-          if (aluno && aluno.formaPagamento !== 'unidade') {
-            const statusNovo = L.statusPagamento(l.status);
-            aluno.pagamento = Object.assign({}, aluno.pagamento, {
-              status: statusNovo, obs: 'Asaas: ' + l.status + (l.vencimento ? (' · venc. ' + l.vencimento) : ''), atualizadoEm: new Date().toISOString(),
-              valorEmAberto: (statusNovo === 'atrasado' || statusNovo === 'pendente') && l.valor ? l.valor.replace(',', '.') : aluno.pagamento.valorEmAberto,
-            });
-            atualizados++;
-          } else if (!aluno) {
-            semMatch.push(l.nome);
-          }
-        });
-        LS.set('alunos', S.alunos);
-        S.asaasImportado = { quando: new Date().toISOString(), atualizados: atualizados, semMatch: semMatch };
-        LS.set('asaasImportado', S.asaasImportado);
-        registrar('Importou relatório do Asaas', atualizados + ' aluno(s) atualizados');
-        toast('Importação concluída: ' + atualizados + ' aluno(s) atualizados' + (semMatch.length ? (', ' + semMatch.length + ' sem correspondência') : ''));
+      const files = Array.prototype.slice.call(el.files || []);
+      el.value = '';
+      if (!files.length) return;
+      V.asaasLendo = true; render();
+      Promise.all(files.map(lerPlanilha)).then(function (listas) {
+        V.asaasLendo = false;
+        const linhas = L.asaasLinhas([].concat.apply([], listas));
+        if (!linhas.length) { render(); toast('Não encontrei cobranças nesse arquivo. Ele precisa ter as colunas Nome, Situação e Valor, como sai do Asaas.'); return; }
+        const plano = L.asaasPlano(linhas, { alunos: S.alunos, entradas: S.entradas, pendencias: S.pendencias });
+        V.planoAsaas = plano;
         render();
-      };
-      reader.readAsText(file, 'utf-8');
+        dlgPlanoAsaas(plano, files.map(function (f) { return f.name; }));
+      }).catch(function (err) { V.asaasLendo = false; render(); toast((err && err.message) || 'Não consegui ler a planilha.'); });
     },
+    'confirmar-asaas': function () {
+      const plano = V.planoAsaas;
+      if (!plano) return;
+      const agora = new Date().toISOString(), autor = autorAtualizacao();
+      plano.entradas.forEach(function (e) {
+        S.entradas.push(Object.assign({ id: proxId('ent', S.entradas), criadoEm: agora, criadoPor: autor + ' (Asaas)' }, e));
+      });
+      let atualizados = 0;
+      Object.keys(plano.situacao).forEach(function (id) {
+        const a = D.alunoPorId[id], sit = plano.situacao[id];
+        if (!a) return;
+        a.pagamento = Object.assign({}, a.pagamento, {
+          status: sit.status, obs: 'Asaas: ' + sit.obs.join(' · '), atualizadoEm: agora,
+          valorEmAberto: sit.valorEmAberto ? sit.valorEmAberto.toFixed(2) : '',
+        });
+        atualizados++;
+      });
+      plano.pendencias.forEach(function (p) {
+        S.pendencias.push(Object.assign({ id: proxId('pend', S.pendencias), turmaId: '', prazo: '', resolvida: false, criadaEm: agora, origem: 'Asaas', atualizacoes: [] }, p));
+      });
+      plano.resolver.forEach(function (r) {
+        const p = S.pendencias.find(function (x) { return x.id === r.id; });
+        if (!p) return;
+        p.resolvida = true;
+        p.atualizacoes = (p.atualizacoes || []).concat([{ ts: agora, autor: 'Importação do Asaas', texto: r.texto }]);
+      });
+      LS.set('entradas', S.entradas);
+      LS.set('alunos', S.alunos);
+      LS.set('pendencias', S.pendencias);
+      S.asaasImportado = { quando: agora, autor: autor, atualizados: atualizados, entradas: plano.entradas.length, pendencias: plano.pendencias.length, resolvidas: plano.resolver.length, semMatch: [] };
+      LS.set('asaasImportado', S.asaasImportado);
+      registrar('Importou relatório do Asaas', plano.entradas.length + ' entrada(s), ' + atualizados + ' aluno(s) atualizados, ' + plano.pendencias.length + ' pendência(s) nova(s)');
+      V.planoAsaas = null;
+      fecharDlg();
+      recalc();
+      toast('Importação concluída');
+      render();
+    },
+    'ir-pendencias-cobranca': function () { V.view = 'pendencias'; V.fPendencia = 'cobranca'; render(); },
     /* ---- Matrículas ---- */
     'nm-aluno': function (el) { V.novaMatricula.alunoId = el.value; render(); },
     'nm-nome': function (el) { V.novaMatricula.alunoNome = el.value; },
@@ -12120,6 +12434,7 @@ window.FIREBASE_CONFIG = {
       const p = S.pendencias.find(function (x) { return x.id === el.dataset.id; });
       if (!p) return;
       p.resolvida = el.checked;
+      p.atualizacoes = (p.atualizacoes || []).concat([{ ts: new Date().toISOString(), autor: autorAtualizacao(), texto: p.resolvida ? 'Marcou como resolvida.' : 'Reabriu a pendência.' }]);
       LS.set('pendencias', S.pendencias);
       registrar('Atualizou pendência', p.texto + ' → ' + (p.resolvida ? 'resolvida' : 'reaberta'));
       render();
@@ -12133,6 +12448,19 @@ window.FIREBASE_CONFIG = {
       render();
     },
     'filtro-pendencia': function (el) { V.fPendencia = el.value; render(); },
+    'pend-abrir': function (el) { V.pendAbertas[el.dataset.id] = !V.pendAbertas[el.dataset.id]; render(); },
+    'pend-upd-texto': function (el) { V.pendUpd[el.dataset.id] = el.value; },
+    'pend-add-upd': function (el) {
+      const p = S.pendencias.find(function (x) { return x.id === el.dataset.id; });
+      const texto = (V.pendUpd[el.dataset.id] || '').trim();
+      if (!p) return;
+      if (!texto) { toast('Escreva a atualização.'); return; }
+      p.atualizacoes = (p.atualizacoes || []).concat([{ ts: new Date().toISOString(), autor: autorAtualizacao(), texto: texto }]);
+      V.pendUpd[p.id] = '';
+      LS.set('pendencias', S.pendencias);
+      registrar('Atualizou pendência', p.texto + ' → ' + texto);
+      render();
+    },
     /* ---- Comunicados ---- */
     'com-turma-toggle': function (el) {
       const nc = V.novoComunicado;

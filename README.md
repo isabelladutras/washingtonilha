@@ -276,3 +276,25 @@ A lista de professores e turmas que a página do ponto mostra é atualizada sozi
 2. Ver a aba **Conferência** e resolver os choques e as turmas sem sala.
 3. Em **Alunos**, cadastrar telefones conforme for falando com cada um (ou importar depois, se tiver a lista em algum lugar).
 4. Em **Dados**, importar o primeiro relatório do Asaas para já ver a situação de pagamento de todo mundo.
+
+## Importar relatório do Asaas (entradas, situação e pendências)
+
+Botão **Importar relatório do Asaas** na aba **Entradas** (e também em **Dados**). Aceita o relatório de cobranças do Asaas em **.xlsx** ou **.csv**. Pode subir o de recebidas, o de em aberto ou os dois juntos.
+
+Antes de gravar, o painel mostra um resumo para confirmar. Na confirmação:
+
+- **Recebidas** viram lançamentos em **Entradas**, com a data do pagamento, a forma (Pix/boleto) e "Mensalidade · venc. out/2026" (ou Material). Quem pagou, se for diferente do aluno, fica na observação.
+- A **situação de pagamento** de cada aluno é atualizada (em dia / atrasado, com o valor em aberto) e aparece em **Inadimplência**.
+- O que precisa de conferência vira **pendência de cobrança** (filtro "Cobranças em aberto" na aba Pendências):
+  - pagamento que o painel não conseguiu ligar a um aluno (ou sem descrição);
+  - cobrança vencida, uma pendência por pagador, com valores, vencimentos e celular;
+  - aluno marcado como cancelado que continua sendo cobrado no Asaas.
+- Pendência de cobrança vencida que aparecer como **recebida** num relatório seguinte é fechada sozinha, com a atualização "Pagamento confirmado no relatório do Asaas".
+
+Importar o mesmo arquivo de novo não duplica nada: cada cobrança do Asaas entra uma vez só. Lançamentos que já tinham sido feitos à mão (mesmo aluno, mesmo valor e mesma data) também são pulados.
+
+Como o painel liga o pagamento ao aluno: nome igual ao do aluno; nome igual ao campo **"Nome de quem paga no Asaas"** da ficha do aluno; nome do aluno escrito na descrição do boleto (ex.: "Mensalidade Academia Washington - Rebeca Santos"); ou nome muito parecido. Quando descobrir de quem é um pagamento, preencha "Nome de quem paga no Asaas" na ficha do aluno: os próximos relatórios já reconhecem.
+
+## Atualizações nas pendências
+
+Toda pendência tem o botão **Atualizações**. Ele mostra o contexto (para as de cobrança), o histórico e um campo para registrar o que foi feito. Cada atualização guarda quem escreveu (e-mail do login) e quando. Marcar ou desmarcar como resolvida também fica registrado no histórico.

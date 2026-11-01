@@ -567,7 +567,214 @@
     };
   }
 
+  /* ---------- Relatório de cobranças do Asaas (.xlsx ou .csv) → entradas, situação e pendências ----------
+     O app.js lê a planilha (com a biblioteca SheetJS) e entrega aqui uma lista de objetos com as
+     colunas do Asaas. Tudo daqui pra baixo é cálculo puro (sem tela), pra poder ser testado. */
+  function asaasData(v) {
+    if (v == null || v === '') return '';
+    if (typeof v === 'number') return new Date(Math.round((v - 25569) * 864e5)).toISOString().slice(0, 10);
+    if (v instanceof Date) return v.toISOString().slice(0, 10);
+    const s = String(v).trim();
+    let m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(s);
+    if (m) return m[3] + '-' + m[2].padStart(2, '0') + '-' + m[1].padStart(2, '0');
+    m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+    return m ? m[0] : '';
+  }
+  function asaasNumero(v) {
+    if (typeof v === 'number') return v;
+    const s = String(v == null ? '' : v).replace(/[R$\s]/g, '');
+    if (!s) return 0;
+    return (s.indexOf(',') > -1 ? parseFloat(s.replace(/\./g, '').replace(',', '.')) : parseFloat(s)) || 0;
+  }
+  /** Linhas cruas (objetos {cabeçalho: valor}) → lista padronizada de cobranças. */
+  function asaasLinhas(rows) {
+    function pega(r, nomes) {
+      const ks = Object.keys(r);
+      for (let i = 0; i < ks.length; i++) if (nomes.indexOf(norm(ks[i])) > -1) return r[ks[i]];
+      return '';
+    }
+    return (rows || []).map(function (r) {
+      return {
+        ident: String(pega(r, ['identificador', 'id']) || '').replace(/\.0$/, '').trim(),
+        nome: String(pega(r, ['nome', 'cliente', 'nome do cliente', 'pagador']) || '').trim(),
+        celular: String(pega(r, ['celular', 'fone', 'telefone']) || '').trim(),
+        vencimento: asaasData(pega(r, ['vencimento', 'data de vencimento'])),
+        vencimentoOriginal: asaasData(pega(r, ['vencimento original'])),
+        pagamento: asaasData(pega(r, ['data de pagamento', 'data do pagamento'])),
+        valor: asaasNumero(pega(r, ['valor', 'valor (r$)'])),
+        status: String(pega(r, ['situacao', 'status']) || '').trim(),
+        descricao: String(pega(r, ['descricao', 'historico', 'referencia']) || '').trim(),
+        forma: String(pega(r, ['forma de pagamento']) || '').trim(),
+      };
+    }).filter(function (l) { return l.nome && l.status; });
+  }
+  const ASAAS_STOP = ['mensalidade', 'mensalide', 'mennsalidade', 'academia', 'acdemia', 'washington', 'washigton', 'material', 'fluent', 'de', 'da', 'do', 'dos', 'das', 'e', 'descricao', 'nao', 'informada', 'matricula'];
+  function tokensNome(s) { return norm(s).replace(/[^a-z0-9 ]/g, ' ').split(' ').filter(function (w) { return w.length > 1 && ASAAS_STOP.indexOf(w) < 0; }); }
+  /** Melhor aluno para um nome (score = palavras em comum, exigindo o 1º nome igual). Só devolve se for único. */
+  function melhorAlunoPorNome(nome, alunos) {
+    const tk = tokensNome(nome);
+    if (!tk.length) return null;
+    let melhor = 0, achados = [];
+    alunos.forEach(function (a) {
+      const ta = tokensNome(a.nome);
+      if (!ta.length || ta[0] !== tk[0]) return;
+      const comum = tk.filter(function (w) { return ta.indexOf(w) > -1; }).length;
+      // Precisa bater pelo menos 3 palavras, ou todas as do nome mais curto (ex.: cadastro só "Adenilton",
+      // descrição só "Miguel Ferreira"). Evita casar "Ana Carolina de Oliveira" com "Ana Paula de Oliveira".
+      const ok = comum >= Math.min(3, ta.length, tk.length);
+      if (!ok) return;
+      if (comum > melhor) { melhor = comum; achados = [a]; } else if (comum === melhor) achados.push(a);
+    });
+    return achados.length === 1 ? achados[0] : null;
+  }
+  /** Acha o aluno de uma cobrança: nome igual, responsável financeiro, nome do aluno na descrição, ou nome parecido. */
+  function asaasCasarAluno(l, alunos) {
+    const ativos = (alunos || []).filter(function (a) { return a && a.nome; });
+    const key = norm(l.nome);
+    let a = ativos.find(function (x) { return norm(x.nome) === key; });
+    if (a) return { aluno: a, como: 'nome' };
+    a = ativos.find(function (x) { return x.responsavelFinanceiro && norm(x.responsavelFinanceiro) === key; });
+    if (a) return { aluno: a, como: 'responsavel' };
+    const desc = l.descricao || '';
+    const depoisTraco = desc.indexOf('-') > -1 ? desc.slice(desc.indexOf('-') + 1) : '';
+    if (depoisTraco.trim()) { a = melhorAlunoPorNome(depoisTraco, ativos); if (a) return { aluno: a, como: 'descricao' }; }
+    const descN = norm(desc);
+    if (descN) { a = ativos.find(function (x) { return norm(x.nome).split(' ').length >= 2 && descN.indexOf(norm(x.nome)) > -1; }); if (a) return { aluno: a, como: 'descricao' }; }
+    if (tokensNome(desc).length >= 2) { a = melhorAlunoPorNome(desc, ativos); if (a) return { aluno: a, como: 'descricao' }; }
+    a = melhorAlunoPorNome(l.nome, ativos);
+    if (a) return { aluno: a, como: 'parecido' };
+    return null;
+  }
+  function asaasTipo(desc) { const d = norm(desc); if (d.indexOf('material') > -1) return 'Material'; if (/mens?al|mennsal/.test(d)) return 'Mensalidade'; if (d.indexOf('matricula') > -1) return 'Matrícula'; return ''; }
+  function asaasSemDescricao(desc) { const d = norm(desc).replace(/[^a-z ]/g, '').trim(); return !d || d === 'descricao nao informada' || d === 'academia washington'; }
+  function asaasForma(f) { const n = norm(f); if (n.indexOf('pix') > -1) return 'Pix'; if (n.indexOf('boleto') > -1) return 'Boleto'; if (n.indexOf('debito') > -1) return 'Cartão de débito'; if (n.indexOf('cartao') > -1 || n.indexOf('credito') > -1) return 'Cartão de crédito'; if (n.indexOf('dinheiro') > -1) return 'Dinheiro'; if (n.indexOf('transfer') > -1) return 'Transferência'; return 'Boleto'; }
+  const MESES_CURTOS = ['jan', 'fev', 'mar', 'abr', 'mai', 'jun', 'jul', 'ago', 'set', 'out', 'nov', 'dez'];
+  function mesCurto(iso) { return iso ? (MESES_CURTOS[Number(iso.slice(5, 7)) - 1] + '/' + iso.slice(0, 4)) : ''; }
+  function brl(v) { return 'R$ ' + (Number(v) || 0).toFixed(2).replace('.', ','); }
+  function dm(iso) { return iso ? iso.slice(8, 10) + '/' + iso.slice(5, 7) : ''; }
+  /**
+   * Monta o plano de importação sem mexer em nada. `estado` = { alunos, entradas, pendencias }.
+   * Devolve { entradas: [novas], repetidas, situacao: {alunoId: {...}}, pendencias: [novas],
+   *           resolver: [{id, texto}], semAluno, contagem }.
+   */
+  function asaasPlano(linhas, estado) {
+    const alunos = estado.alunos || [], entradas = estado.entradas || [], pends = estado.pendencias || [];
+    const pagas = [], abertas = [];
+    linhas.forEach(function (l) {
+      const st = statusPagamento(l.status);
+      if (st === 'em dia') pagas.push(l); else if (st === 'atrasado' || st === 'pendente') abertas.push(l);
+    });
+    const jaImportadas = {}; entradas.forEach(function (e) { if (e.asaasId) jaImportadas[e.asaasId] = true; });
+    const chavesPend = {}; pends.forEach(function (p) { if (p.chave) chavesPend[p.chave] = p; });
+    const plano = { entradas: [], repetidas: 0, manuais: 0, situacao: {}, pendencias: [], resolver: [], contagem: { pagas: pagas.length, abertas: abertas.length, valorPago: 0, valorAberto: 0 } };
+    const casados = {}, conferirPorPagador = {};
+    function casar(l) { const k = l.ident || (l.nome + l.valor + l.vencimento); if (!(k in casados)) casados[k] = asaasCasarAluno(l, alunos); return casados[k]; }
+    // 1) Recebidas → entradas
+    pagas.forEach(function (l) {
+      plano.contagem.valorPago += l.valor;
+      if (l.ident && jaImportadas[l.ident]) { plano.repetidas++; return; }
+      const c = casar(l), a = c && c.aluno;
+      const data = l.pagamento || l.vencimento;
+      // Já lançada à mão? (mesmo aluno/nome, mesmo valor, mesma data)
+      const manual = entradas.some(function (e) {
+        if (e.asaasId) return false;
+        const mesmoAluno = a ? e.alunoId === a.id : norm(e.alunoNome) === norm(l.nome);
+        return mesmoAluno && Math.abs(Number(String(e.valor).replace(',', '.')) - l.valor) < 0.01 && e.data === data;
+      });
+      if (manual) { plano.manuais++; return; }
+      const tipo = asaasTipo(l.descricao);
+      plano.entradas.push({
+        data: data, alunoId: a ? a.id : '', alunoNome: a ? a.nome : l.nome, valor: l.valor.toFixed(2), formaPagamento: asaasForma(l.forma),
+        referente: (tipo || 'Cobrança') + (l.vencimento ? (' · venc. ' + mesCurto(l.vencimento)) : ''),
+        obs: 'Asaas' + (a && norm(a.nome) !== norm(l.nome) ? (' · pago por ' + l.nome) : '') + (l.descricao && !asaasSemDescricao(l.descricao) ? (' · ' + l.descricao) : ''),
+        asaasId: l.ident,
+      });
+      if (!a || (asaasSemDescricao(l.descricao) && c.como === 'parecido')) {
+        const ja = pends.some(function (p) { return l.ident && (p.asaasIds || []).indexOf(l.ident) > -1; });
+        if (ja) return;
+        const linha = '• ' + brl(l.valor) + ' pago em ' + dm(l.pagamento) + ' (' + asaasForma(l.forma) + '), descrição no Asaas: ' + (asaasSemDescricao(l.descricao) ? 'nenhuma' : '"' + l.descricao + '"');
+        const k = norm(l.nome);
+        let p = conferirPorPagador[k];
+        if (!p) {
+          p = conferirPorPagador[k] = {
+            chave: 'asaas-conferir:' + (l.ident || k), categoria: 'cobranca', alunoId: a ? a.id : '',
+            texto: 'Conferir pagamento de ' + l.nome + ': de qual aluno e turma é?',
+            linhas: [], semDescricao: false, asaasIds: [],
+          };
+          plano.pendencias.push(p);
+        }
+        p.linhas.push(linha);
+        if (asaasSemDescricao(l.descricao)) p.semDescricao = true;
+        if (l.ident) p.asaasIds.push(l.ident);
+      }
+    });
+    // 2) Situação de pagamento por aluno (atrasado/pendente vence "em dia")
+    function marcar(a, status, l) {
+      const s = plano.situacao[a.id] || (plano.situacao[a.id] = { status: 'em dia', valorEmAberto: 0, obs: [] });
+      if (status === 'atrasado' || (status === 'pendente' && s.status === 'em dia')) s.status = status;
+      if (status !== 'em dia') s.valorEmAberto += l.valor;
+      s.obs.push(l.status + (l.vencimento ? (' venc. ' + dm(l.vencimento)) : '') + ' ' + brl(l.valor));
+    }
+    pagas.forEach(function (l) { const c = casar(l); if (c && c.aluno.formaPagamento !== 'unidade') marcar(c.aluno, 'em dia', l); });
+    // 3) Em aberto → situação do aluno + pendência de cobrança (uma por pagador)
+    const porPagador = {};
+    abertas.forEach(function (l) {
+      plano.contagem.valorAberto += l.valor;
+      const c = casar(l);
+      if (c && c.aluno.formaPagamento !== 'unidade') marcar(c.aluno, statusPagamento(l.status), l);
+      (porPagador[norm(l.nome)] = porPagador[norm(l.nome)] || []).push({ l: l, c: c });
+    });
+    Object.keys(porPagador).forEach(function (k) {
+      const itens = porPagador[k], l0 = itens[0].l;
+      const novos = itens.filter(function (it) { return !it.l.ident || !pends.some(function (p) { return (p.asaasIds || []).indexOf(it.l.ident) > -1; }); });
+      if (!novos.length) return;
+      const alunosNomes = Array.from(new Set(novos.map(function (it) { return it.c ? it.c.aluno.nome : ''; }).filter(Boolean)));
+      const total = novos.reduce(function (s, it) { return s + it.l.valor; }, 0);
+      plano.pendencias.push({
+        chave: 'asaas-aberto:' + novos.map(function (it) { return it.l.ident; }).join(','), categoria: 'cobranca',
+        alunoId: novos[0].c ? novos[0].c.aluno.id : '',
+        texto: 'Cobrar ' + l0.nome + ' · ' + brl(total) + ' em aberto' + (alunosNomes.length && norm(alunosNomes.join(' ')) !== norm(l0.nome) ? (' (' + alunosNomes.join(', ') + ')') : ''),
+        detalhe: novos.map(function (it) { return '• ' + (it.l.descricao || 'Sem descrição') + ': ' + brl(it.l.valor) + ', ' + it.l.status.toLowerCase() + ', venc. ' + dm(it.l.vencimento) + (it.l.vencimentoOriginal && it.l.vencimentoOriginal !== it.l.vencimento ? (' (era ' + dm(it.l.vencimentoOriginal) + ')') : ''); }).join('\n') +
+          (l0.celular ? ('\nCelular: ' + l0.celular) : '') + (alunosNomes.length ? '' : '\nAluno não identificado: descubra de quem é e preencha "Nome de quem paga no Asaas" na ficha do aluno.'),
+        asaasIds: novos.map(function (it) { return it.l.ident; }).filter(Boolean),
+      });
+    });
+    // 3b) Aluno que já saiu (cancelado no painel) mas continua sendo cobrado no Asaas
+    const canceladosVistos = {};
+    pagas.concat(abertas).forEach(function (l) {
+      const c = casar(l);
+      if (!c || !c.aluno.cancelado || canceladosVistos[c.aluno.id]) return;
+      const chave = 'asaas-cancelado:' + c.aluno.id + ':' + (l.vencimento || '').slice(0, 7);
+      if (chavesPend[chave]) return;
+      canceladosVistos[c.aluno.id] = true;
+      plano.pendencias.push({
+        chave: chave, categoria: 'cobranca', alunoId: c.aluno.id,
+        texto: c.aluno.nome + ' saiu da turma, mas ainda tem cobrança no Asaas',
+        detalhe: '• ' + (l.descricao || 'Cobrança') + ': ' + brl(l.valor) + ', ' + l.status.toLowerCase() + ', venc. ' + dm(l.vencimento) +
+          '\nCancelar a recorrência no Asaas e decidir o que fazer com o valor (estorno ou abatimento).',
+        asaasIds: l.ident ? [l.ident] : [],
+      });
+    });
+    // 4) Pendências de cobrança que agora aparecem pagas → resolver
+    const pagasPorId = {}; pagas.forEach(function (l) { if (l.ident) pagasPorId[l.ident] = l; });
+    pends.forEach(function (p) {
+      if (p.resolvida || p.categoria !== 'cobranca' || !(p.asaasIds || []).length || String(p.chave || '').indexOf('asaas-aberto:') !== 0) return;
+      const pagos = p.asaasIds.filter(function (id) { return pagasPorId[id]; });
+      if (pagos.length === p.asaasIds.length) plano.resolver.push({ id: p.id, texto: 'Pagamento confirmado no relatório do Asaas: ' + pagos.map(function (id) { return dm(pagasPorId[id].pagamento) + ' ' + brl(pagasPorId[id].valor); }).join('; ') + '.' });
+    });
+    Object.keys(conferirPorPagador).forEach(function (k) {
+      const p = conferirPorPagador[k];
+      p.detalhe = p.linhas.join('\n') + (p.semDescricao ? '\nInforme também se o valor é mensalidade, matrícula ou material.' : '') +
+        '\nQuando descobrir o aluno, preencha "Nome de quem paga no Asaas" na ficha dele: assim os próximos relatórios já reconhecem.';
+      delete p.linhas; delete p.semDescricao;
+    });
+    plano.contagem.valorPago = Math.round(plano.contagem.valorPago * 100) / 100;
+    plano.contagem.valorAberto = Math.round(plano.contagem.valorAberto * 100) / 100;
+    return plano;
+  }
+
   return {
+    asaasLinhas: asaasLinhas, asaasCasarAluno: asaasCasarAluno, asaasPlano: asaasPlano,
     pontoSlug: pontoSlug, fmtHM: fmtHM, dataLocal: dataLocal, horaLocal: horaLocal,
     periodoFechamento: periodoFechamento, parearPonto: parearPonto, compararComHorario: compararComHorario,
     DIAS_ORDEM: DIAS_ORDEM, DIAS_FULL: DIAS_FULL,
