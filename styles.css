@@ -274,3 +274,11 @@ body.tela-login .rail { display: none; }
 .pend-nova-upd { display: grid; gap: 0.4rem; }
 .pend-nova-upd textarea { width: 100%; font: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 0.45rem 0.6rem; resize: vertical; }
 .pend-nova-upd .btn { justify-self: start; }
+/* Virada de mês: aviso de mês fechado e arquivo dos meses anteriores */
+.aviso-mes { background: var(--warn-soft); color: var(--ink); border-radius: 8px; padding: 0.55rem 0.8rem; font-size: 0.88rem; margin: 0.5rem 0; }
+.arquivo-meses summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 0.5rem; }
+.arquivo-meses summary::-webkit-details-marker { display: none; }
+.arquivo-meses summary::before { content: '▸'; color: var(--ink-3); }
+.arquivo-meses[open] summary::before { content: '▾'; }
+.arquivo-meses summary h2 { margin: 0; }
+.tabela-rolagem { overflow-x: auto; }

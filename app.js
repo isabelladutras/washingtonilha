@@ -154,7 +154,7 @@
     LS.set('versaoDados', versaoNova);
   })();
   const params = new URLSearchParams(location.search);
-  const HOJE = /^\d{4}-\d{2}-\d{2}$/.test(params.get('hoje') || '') ? params.get('hoje') : new Date().toISOString().slice(0, 10);
+  const HOJE = /^\d{4}-\d{2}-\d{2}$/.test(params.get('hoje') || '') ? params.get('hoje') : new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' });
   const ASAAS_DASHBOARD_URL = 'https://www.asaas.com/dashboard/index';
   // Minutos desde meia-noite agora — usado pra saber quais turmas do dia já aconteceram. Aceita
   // "?agora=HH:MM" (igual ao "?hoje=") só pra dar pra testar de forma previsível; no uso real
@@ -179,7 +179,9 @@
     novaEntrada: { data: HOJE, alunoId: '', alunoNome: '', valor: '', formaPagamento: 'Pix', referente: '', obs: '' },
     novaDespesa: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false, parcelado: false, parcelas: '' },
     novaDespesaUnifecaf: { data: HOJE, descricao: '', categoria: 'Custos Fixos', valor: '', pagoPor: '', pago: false, obs: '', fixa: false, parcelado: false, parcelas: '' },
-    fMesEntradas: '', fMesDespesas: '', fMesDespesasUnifecaf: '',
+    // Entradas e Despesas abrem sempre no mês atual: quando vira o mês, o anterior sai da tela
+    // e fica guardado em "Meses fechados" (dá pra abrir qualquer um pelo seletor ou pelo arquivo).
+    fMesEntradas: HOJE.slice(0, 7), fMesDespesas: HOJE.slice(0, 7), fMesDespesasUnifecaf: HOJE.slice(0, 7),
     novaPendencia: { texto: '', alunoId: '', turmaId: '', prazo: '' }, fPendencia: 'abertas', pendAbertas: {}, pendUpd: {}, planoAsaas: null, asaasLendo: false,
     novoComunicado: { mensagem: '', turmaIds: [], disponivelEm: '' },
     novoModeloComunicado: { nome: '', texto: '' },
@@ -1222,7 +1224,46 @@
     const p = ym.split('-');
     return MESES[Number(p[1]) - 1] + ' de ' + p[0];
   }
-  function mesesDisponiveis(lista) { return Array.from(new Set(lista.map(function (x) { return mesDeData(x.data); }).filter(Boolean))).sort().reverse(); }
+  function mesesDisponiveis(lista) { return Array.from(new Set(lista.map(function (x) { return mesDeData(x.data); }).filter(Boolean).concat([HOJE.slice(0, 7)]))).sort().reverse(); }
+  function somarMes(ym, n) { const p = ym.split('-').map(Number); const d = new Date(p[0], p[1] - 1 + n, 15); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0'); }
+  /* Seletor de mês com ‹ › e aviso quando a tela está num mês já fechado. */
+  function seletorMes(act, conta, valor, meses) {
+    const atual = HOJE.slice(0, 7);
+    const extra = conta ? (' data-conta="' + conta + '"') : '';
+    const nav = function (n, rotulo, titulo) {
+      if (!valor) return '';
+      return '<button type="button" class="btn sm" data-act="' + act + '-nav"' + extra + ' data-mes="' + somarMes(valor, n) + '" aria-label="' + titulo + '">' + rotulo + '</button>';
+    };
+    return nav(-1, '‹', 'Mês anterior') +
+      '<select data-act="' + act + '"' + extra + '><option value="">Todos os meses</option>' + meses.map(function (m) { return '<option value="' + m + '"' + (valor === m ? ' selected' : '') + '>' + esc(nomeMes(m)) + (m === atual ? ' (mês atual)' : '') + '</option>'; }).join('') + '</select>' +
+      (valor && valor < atual ? nav(1, '›', 'Próximo mês') : '');
+  }
+  function avisoMesFechado(act, conta, valor) {
+    const atual = HOJE.slice(0, 7);
+    if (!valor || valor >= atual) return '';
+    return '<p class="aviso-mes">Você está vendo <b>' + esc(nomeMes(valor)) + '</b>, um mês já fechado. Novos lançamentos entram no mês da data informada. <button type="button" class="link" data-act="' + act + '-nav"' + (conta ? (' data-conta="' + conta + '"') : '') + ' data-mes="' + atual + '">Voltar para ' + esc(nomeMes(atual)) + '</button></p>';
+  }
+  /* Arquivo dos meses anteriores: um resumo por mês (entradas, despesas, saldo) com atalho para abrir. */
+  function arquivoMeses(conta, act) {
+    const atual = HOJE.slice(0, 7);
+    const comEntradas = conta !== 'unifecaf';
+    const despesas = conta === 'unifecaf' ? S.despesasUnifecaf : S.despesas;
+    const meses = Array.from(new Set(despesas.concat(comEntradas ? S.entradas : []).map(function (x) { return mesDeData(x.data); }).filter(function (m) { return m && m < atual; }))).sort().reverse();
+    if (!meses.length) return '';
+    const linhas = meses.map(function (m) {
+      const en = comEntradas ? totalLista(S.entradas, m) : 0, de = totalLista(despesas, m);
+      const nEn = comEntradas ? S.entradas.filter(function (x) { return mesDeData(x.data) === m; }).length : 0;
+      const nDe = despesas.filter(function (x) { return mesDeData(x.data) === m; }).length;
+      return '<tr><td><b>' + esc(nomeMes(m)) + '</b></td>' +
+        (comEntradas ? ('<td>' + fmtReais(en) + ' <span class="muted">(' + nEn + ')</span></td>') : '') +
+        '<td>' + fmtReais(de) + ' <span class="muted">(' + nDe + ')</span></td>' +
+        (comEntradas ? ('<td>' + saldoTag(en - de) + '</td>') : '') +
+        '<td><button type="button" class="btn sm" data-act="' + act + '-nav"' + (conta ? (' data-conta="' + conta + '"') : '') + ' data-mes="' + m + '">Abrir</button></td></tr>';
+    }).join('');
+    return '<details class="bloco arquivo-meses"><summary><h2>Meses fechados (' + meses.length + ')</h2></summary>' +
+      '<p class="muted">Os lançamentos continuam guardados; a tela só mostra o mês atual para não misturar.</p>' +
+      '<div class="tabela-rolagem"><table class="tabela"><thead><tr><th>Mês</th>' + (comEntradas ? '<th>Entradas</th>' : '') + '<th>Despesas</th>' + (comEntradas ? '<th>Saldo</th>' : '') + '<th></th></tr></thead><tbody>' + linhas + '</tbody></table></div></details>';
+  }
   /* Soma o campo "valor" (R$) de uma lista (entradas ou despesas), opcionalmente só de um mês
      específico (AAAA-MM) — usado pra calcular o saldo (entradas − despesas) do período. */
   function totalLista(lista, mesFiltro) {
@@ -1279,10 +1320,12 @@
       '<button class="btn on" type="button" data-act="add-entrada">Registrar</button>' +
       '</section>' +
       '<div class="filtros">' +
-      '<select data-act="filtro-mes-entradas"><option value="">Todos os meses</option>' + meses.map(function (m) { return '<option value="' + m + '"' + (V.fMesEntradas === m ? ' selected' : '') + '>' + esc(nomeMes(m)) + '</option>'; }).join('') + '</select>' +
+      seletorMes('filtro-mes-entradas', '', V.fMesEntradas, meses) +
       '<span class="muted">' + lista.length + ' lançamento(s) · total ' + fmtReais(total) + ' · despesas no mesmo período ' + fmtReais(despesasMesmoPeriodo) + '</span> ' + saldoTag(total - despesasMesmoPeriodo) +
       '</div>' +
-      (lista.length ? ('<table class="tabela"><thead><tr><th>Data</th><th>Aluno</th><th>Valor</th><th>Forma</th><th>Referente a</th><th></th></tr></thead><tbody>' + lista.map(linhaEntrada).join('') + '</tbody></table>') : '<p class="muted">Nenhuma entrada registrada ainda.</p>');
+      avisoMesFechado('filtro-mes-entradas', '', V.fMesEntradas) +
+      (lista.length ? ('<table class="tabela"><thead><tr><th>Data</th><th>Aluno</th><th>Valor</th><th>Forma</th><th>Referente a</th><th></th></tr></thead><tbody>' + lista.map(linhaEntrada).join('') + '</tbody></table>') : '<p class="muted">' + (V.fMesEntradas ? ('Nenhuma entrada em ' + esc(nomeMes(V.fMesEntradas)) + ' ainda.') : 'Nenhuma entrada registrada ainda.') + '</p>') +
+      arquivoMeses('washington', 'filtro-mes-entradas');
   }
 
   /* ---------- Despesas (gastos) ---------- */
@@ -1383,11 +1426,13 @@
             '</div>';
         }).join('') + '</section>') : '') +
       '<div class="filtros">' +
-      '<select data-act="filtro-mes-despesas" data-conta="' + conta + '"><option value="">Todos os meses</option>' + meses.map(function (m) { return '<option value="' + m + '"' + (V[fMesKey] === m ? ' selected' : '') + '>' + esc(nomeMes(m)) + '</option>'; }).join('') + '</select>' +
+      seletorMes('filtro-mes-despesas', conta, V[fMesKey], meses) +
       '<span class="muted">' + lista.length + ' lançamento(s) · total ' + fmtReais(total) + (conta === 'washington' ? (' · entradas no mesmo período ' + fmtReais(entradasMesmoPeriodo)) : '') + '</span> ' + (conta === 'washington' ? saldoTag(entradasMesmoPeriodo - total) : '') +
       '</div>' +
       (categoriasOrdenadas.length ? ('<p class="muted">' + categoriasOrdenadas.map(function (c) { return esc(c) + ': ' + fmtReais(porCategoria[c]); }).join(' · ') + '</p>') : '') +
-      (lista.length ? ('<table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + lista.map(function (d) { return linhaDespesa(d, conta); }).join('') + '</tbody></table>') : '<p class="muted">Nenhuma despesa registrada ainda.</p>');
+      avisoMesFechado('filtro-mes-despesas', conta, V[fMesKey]) +
+      (lista.length ? ('<table class="tabela"><thead><tr><th>Data</th><th>Descrição</th><th>Categoria</th><th>Valor</th><th>Pago por</th><th>Status</th><th></th></tr></thead><tbody>' + lista.map(function (d) { return linhaDespesa(d, conta); }).join('') + '</tbody></table>') : '<p class="muted">' + (V[fMesKey] ? ('Nenhuma despesa em ' + esc(nomeMes(V[fMesKey])) + ' ainda.') : 'Nenhuma despesa registrada ainda.') + '</p>') +
+      arquivoMeses(conta, 'filtro-mes-despesas');
   }
   function viewDespesasUnifecaf() { return viewDespesas('unifecaf'); }
 
@@ -3105,6 +3150,7 @@
     'en-referente': function (el) { V.novaEntrada.referente = el.value; },
     'en-obs': function (el) { V.novaEntrada.obs = el.value; },
     'filtro-mes-entradas': function (el) { V.fMesEntradas = el.value; render(); },
+    'filtro-mes-entradas-nav': function (el) { V.fMesEntradas = el.dataset.mes; render(); window.scrollTo(0, 0); },
     'add-entrada': function () {
       const ne = V.novaEntrada;
       const aluno = ne.alunoId ? D.alunoPorId[ne.alunoId] : null;
@@ -3160,6 +3206,7 @@
     'de-parcelas': function (el) { novaDespesaDoConta(contaDoEl(el)).parcelas = el.value; },
     'de-obs': function (el) { novaDespesaDoConta(contaDoEl(el)).obs = el.value; },
     'filtro-mes-despesas': function (el) { V[filtroMesDespesasKey(contaDoEl(el))] = el.value; render(); },
+    'filtro-mes-despesas-nav': function (el) { V[filtroMesDespesasKey(contaDoEl(el))] = el.dataset.mes; render(); window.scrollTo(0, 0); },
     'add-despesa': function (el) {
       const conta = contaDoEl(el);
       const nd = novaDespesaDoConta(conta);
