@@ -298,3 +298,21 @@ Como o painel liga o pagamento ao aluno: nome igual ao do aluno; nome igual ao c
 ## Atualizações nas pendências
 
 Toda pendência tem o botão **Atualizações**. Ele mostra o contexto (para as de cobrança), o histórico e um campo para registrar o que foi feito. Cada atualização guarda quem escreveu (e-mail do login) e quando. Marcar ou desmarcar como resolvida também fica registrado no histórico.
+
+## Salas (calendário por sala, ocupação e cadastro)
+
+Aba **Salas**, com três modos:
+
+- **Calendário**: colunas = salas (cada uma com uma cor fixa), linhas = horários das turmas do semestre. Escolha o dia da semana e navegue entre as semanas de agosto a dezembro de 2026. Cada bloco mostra turma, professor, horário e alunos. **Arraste um bloco para outra sala**: abre uma janela com os dias atuais já marcados, a nova sala e a checagem de choque na hora; ao confirmar, a turma é atualizada e salva. Clique no bloco para abrir a turma.
+- **Ocupação**: salas livres e ocupadas agora, turmas em andamento, professores ativos, ocupação de cada sala (horas por semana sobre 84 h: seg a sáb, 8h às 22h), turmas por nível e próximas turmas.
+- **Cadastro de salas**: nome, capacidade, observações e status (Ativa/Inativa). Mudar o nome de uma sala atualiza as turmas. Sala usada por turma do semestre atual não pode ser excluída (deixe Inativa).
+
+Enquanto ninguém salvar o cadastro, as salas são montadas a partir das turmas, com capacidade 12.
+
+## Choque de sala e de professor
+
+No cadastro/edição de turma, os dias são caixinhas, o horário é início e fim, e professor e sala vêm dos cadastros. O painel confere na hora se a sala ou o professor já têm turma no mesmo semestre, em dia em comum e horário sobreposto, mostra o choque, sugere salas livres com lugar para os alunos e bloqueia o botão Salvar (conferindo de novo ao salvar). Turmas **Finalizada** e **Não formou turma** não contam, e sala **Online** não dá choque de sala. A aba Conferência segue a mesma regra.
+
+## Exportar CSV
+
+Em **Dados › Exportar planilhas**: turmas (semestre atual), professores, salas e relatório de ocupação, em CSV que abre direto no Excel.

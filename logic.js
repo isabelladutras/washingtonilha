@@ -41,6 +41,32 @@
     return h1[0] < h2[1] && h2[0] < h1[1];
   }
 
+  /* ---------- Salas e choques de horário ----------
+     Turma finalizada, que não formou ou cancelada não ocupa mais sala nem professor. */
+  function turmaOcupaHorario(t) { return !/finaliz|conclu|n[aã]o formou|cancel/i.test(String((t && t.situacao) || '')); }
+  function salaOnline(nome) { return /online/i.test(String(nome || '')); }
+  /** "18h - 19h", "9:45h - 11h" a partir de minutos (o mesmo formato que a planilha usa). */
+  function fmtHoraTurma(min) { const h = Math.floor(min / 60), m = min % 60; return h + (m ? ':' + (m < 10 ? '0' : '') + m : '') + 'h'; }
+  function fmtHorarioTurma(ini, fim) { return fmtHoraTurma(ini) + ' - ' + fmtHoraTurma(fim); }
+  /**
+   * Choques de uma turma (rascunho) com as outras do mesmo semestre: mesma sala ou mesmo professor,
+   * em dia em comum e com horário sobreposto. Ignora turmas que não ocupam horário e salas online.
+   */
+  function conflitosTurma(r, turmas) {
+    const lista = [];
+    if (!turmaOcupaHorario(r)) return lista;
+    const hr = horarioMin(r.horario), dr = diasDaTurma(r.dia);
+    if (!hr || !dr.length) return lista;
+    (turmas || []).forEach(function (o) {
+      if (o.id === r.id || !turmaOcupaHorario(o) || (o.semestre || '') !== (r.semestre || '')) return;
+      const dias = diasDaTurma(o.dia).filter(function (d) { return dr.indexOf(d) > -1; });
+      if (!dias.length || !horariosSeSobrepoem(hr, horarioMin(o.horario))) return;
+      if (r.sala && o.sala && !salaOnline(r.sala) && norm(r.sala) === norm(o.sala)) lista.push({ tipo: 'sala', outra: o, dias: dias });
+      if (r.professor && o.professor && norm(r.professor) === norm(o.professor)) lista.push({ tipo: 'professor', outra: o, dias: dias });
+    });
+    return lista;
+  }
+
   /** Lista de turmas agrupadas por dia da semana, na ordem SEG..DOM, prontas pra grade semanal. */
   function gradeSemanal(turmas) {
     const porDia = {};
@@ -69,6 +95,7 @@
     const avisos = [];
     const porDiaSemestre = {};
     turmas.forEach(function (t) {
+      if (!turmaOcupaHorario(t)) return;
       diasDaTurma(t.dia).forEach(function (d) {
         const chave = (t.semestre || '') + '|' + d;
         (porDiaSemestre[chave] = porDiaSemestre[chave] || []).push(t);
@@ -779,6 +806,7 @@
     periodoFechamento: periodoFechamento, parearPonto: parearPonto, compararComHorario: compararComHorario,
     DIAS_ORDEM: DIAS_ORDEM, DIAS_FULL: DIAS_FULL,
     norm: norm, diasDaTurma: diasDaTurma, horarioMin: horarioMin, horariosSeSobrepoem: horariosSeSobrepoem,
+    turmaOcupaHorario: turmaOcupaHorario, salaOnline: salaOnline, fmtHoraTurma: fmtHoraTurma, fmtHorarioTurma: fmtHorarioTurma, conflitosTurma: conflitosTurma,
     gradeSemanal: gradeSemanal, conferirConflitos: conferirConflitos, juntarNatural: juntarNatural,
     fimContrato: fimContrato, diasAte: diasAte, semestreDeData: semestreDeData, diasEmAtraso: diasEmAtraso,
     somaDias: somaDias, segundaDaSemana: segundaDaSemana, fmtCurta: fmtCurta, fmtLonga: fmtLonga, horaParaMin: horaParaMin,

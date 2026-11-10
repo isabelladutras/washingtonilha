@@ -313,6 +313,37 @@ body.tela-login .rail { display: none; }
 .arquivo-meses[open] summary::before { content: '▾'; }
 .arquivo-meses summary h2 { margin: 0; }
 .tabela-rolagem { overflow-x: auto; }
+/* Salas: calendário por sala, ocupação e choques de horário */
+.dias-check { display: flex; gap: 0.4rem; flex-wrap: wrap; }
+.dias-check label { display: inline-flex; align-items: center; gap: 0.3rem; border: 1px solid var(--line); border-radius: 8px; padding: 0.35rem 0.6rem; cursor: pointer; font-weight: 600; font-size: 0.85rem; background: var(--card); }
+.dias-check label.on { border-color: var(--brand); background: var(--brand-soft); }
+.sala-dot { display: inline-block; width: 0.6rem; height: 0.6rem; border-radius: 50%; margin-right: 0.35rem; vertical-align: middle; }
+.ok-linha { color: var(--ok); font-weight: 600; margin: 0.5rem 0; }
+.aviso ul { margin: 0.3rem 0 0; padding-left: 1.1rem; }
+#et-validacao, #mv-validacao { display: grid; gap: 0.5rem; margin: 0.6rem 0; }
+.muted-inline { color: inherit; opacity: 0.7; font-weight: 400; font-size: 0.78em; }
+.salas-nav { align-items: center; }
+.sc-wrap { overflow: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--card); max-height: calc(100vh - 16rem); }
+.sc-grade { display: grid; min-width: 100%; }
+.sc-hd { position: sticky; top: 0; z-index: 3; background: #f3f6fa; border-bottom: 1px solid var(--line); border-left: 1px solid var(--line-2); padding: 0.55rem 0.5rem; text-align: center; font-weight: 700; font-size: 0.85rem; }
+.sc-hd small { display: block; font-weight: 400; color: var(--ink-3); font-size: 0.72rem; }
+.sc-hd.sc-hora { left: 0; z-index: 4; border-left: 0; }
+.sc-horacel { position: sticky; left: 0; z-index: 2; background: #f3f6fa; border-bottom: 1px solid var(--line-2); padding: 0.25rem 0.5rem; font-family: var(--font-mono); font-size: 0.75rem; color: var(--ink-2); }
+.sc-cel { border-bottom: 1px solid var(--line-2); border-left: 1px solid var(--line-2); }
+.sc-cel.alvo { background: var(--brand-soft); outline: 2px dashed var(--brand); outline-offset: -3px; }
+.sc-bloco { margin: 3px; border-radius: 8px; padding: 0.35rem 0.5rem; color: #fff; font-size: 0.75rem; cursor: grab; z-index: 1; display: flex; flex-direction: column; gap: 1px; overflow: hidden; min-width: 0; box-shadow: 0 1px 2px rgba(0,0,0,.15); }
+.sc-bloco b { font-size: 0.8rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-bloco span { opacity: 0.95; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sc-bloco.provisoria { background-image: repeating-linear-gradient(135deg, rgba(255,255,255,.18) 0 6px, transparent 6px 12px) !important; }
+.sc-bloco.arrastando { opacity: 0.4; }
+.sc-bloco:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+.duas-colunas { display: grid; grid-template-columns: repeat(auto-fit, minmax(20rem, 1fr)); gap: 1rem; }
+.barra-linha { display: grid; grid-template-columns: 8rem minmax(0, 1fr) 6.5rem; gap: 0.6rem; align-items: center; margin: 0.45rem 0; font-size: 0.88rem; }
+.barra-lbl { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.barra { height: 0.7rem; background: var(--line-2); border-radius: 99px; overflow: hidden; }
+.barra i { display: block; height: 100%; border-radius: 99px; }
+.barra-v { text-align: right; color: var(--ink-3); font-variant-numeric: tabular-nums; font-size: 0.8rem; }
+.acoes-icone { white-space: nowrap; text-align: right; }
 
 </style>
 <script>
@@ -8211,6 +8242,32 @@ window.FIREBASE_CONFIG = {
     return h1[0] < h2[1] && h2[0] < h1[1];
   }
 
+  /* ---------- Salas e choques de horário ----------
+     Turma finalizada, que não formou ou cancelada não ocupa mais sala nem professor. */
+  function turmaOcupaHorario(t) { return !/finaliz|conclu|n[aã]o formou|cancel/i.test(String((t && t.situacao) || '')); }
+  function salaOnline(nome) { return /online/i.test(String(nome || '')); }
+  /** "18h - 19h", "9:45h - 11h" a partir de minutos (o mesmo formato que a planilha usa). */
+  function fmtHoraTurma(min) { const h = Math.floor(min / 60), m = min % 60; return h + (m ? ':' + (m < 10 ? '0' : '') + m : '') + 'h'; }
+  function fmtHorarioTurma(ini, fim) { return fmtHoraTurma(ini) + ' - ' + fmtHoraTurma(fim); }
+  /**
+   * Choques de uma turma (rascunho) com as outras do mesmo semestre: mesma sala ou mesmo professor,
+   * em dia em comum e com horário sobreposto. Ignora turmas que não ocupam horário e salas online.
+   */
+  function conflitosTurma(r, turmas) {
+    const lista = [];
+    if (!turmaOcupaHorario(r)) return lista;
+    const hr = horarioMin(r.horario), dr = diasDaTurma(r.dia);
+    if (!hr || !dr.length) return lista;
+    (turmas || []).forEach(function (o) {
+      if (o.id === r.id || !turmaOcupaHorario(o) || (o.semestre || '') !== (r.semestre || '')) return;
+      const dias = diasDaTurma(o.dia).filter(function (d) { return dr.indexOf(d) > -1; });
+      if (!dias.length || !horariosSeSobrepoem(hr, horarioMin(o.horario))) return;
+      if (r.sala && o.sala && !salaOnline(r.sala) && norm(r.sala) === norm(o.sala)) lista.push({ tipo: 'sala', outra: o, dias: dias });
+      if (r.professor && o.professor && norm(r.professor) === norm(o.professor)) lista.push({ tipo: 'professor', outra: o, dias: dias });
+    });
+    return lista;
+  }
+
   /** Lista de turmas agrupadas por dia da semana, na ordem SEG..DOM, prontas pra grade semanal. */
   function gradeSemanal(turmas) {
     const porDia = {};
@@ -8239,6 +8296,7 @@ window.FIREBASE_CONFIG = {
     const avisos = [];
     const porDiaSemestre = {};
     turmas.forEach(function (t) {
+      if (!turmaOcupaHorario(t)) return;
       diasDaTurma(t.dia).forEach(function (d) {
         const chave = (t.semestre || '') + '|' + d;
         (porDiaSemestre[chave] = porDiaSemestre[chave] || []).push(t);
@@ -8949,6 +9007,7 @@ window.FIREBASE_CONFIG = {
     periodoFechamento: periodoFechamento, parearPonto: parearPonto, compararComHorario: compararComHorario,
     DIAS_ORDEM: DIAS_ORDEM, DIAS_FULL: DIAS_FULL,
     norm: norm, diasDaTurma: diasDaTurma, horarioMin: horarioMin, horariosSeSobrepoem: horariosSeSobrepoem,
+    turmaOcupaHorario: turmaOcupaHorario, salaOnline: salaOnline, fmtHoraTurma: fmtHoraTurma, fmtHorarioTurma: fmtHorarioTurma, conflitosTurma: conflitosTurma,
     gradeSemanal: gradeSemanal, conferirConflitos: conferirConflitos, juntarNatural: juntarNatural,
     fimContrato: fimContrato, diasAte: diasAte, semestreDeData: semestreDeData, diasEmAtraso: diasEmAtraso,
     somaDias: somaDias, segundaDaSemana: segundaDaSemana, fmtCurta: fmtCurta, fmtLonga: fmtLonga, horaParaMin: horaParaMin,
@@ -9171,7 +9230,7 @@ window.FIREBASE_CONFIG = {
 
   /* ---------- Armazenamento local (por navegador) + sincronização opcional entre navegadores ---------- */
   const Sync = window.Sync || { configured: function () { return false; }, init: function () {}, push: function () { return Promise.resolve(false); } };
-  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'despesasUnifecaf', 'pendencias', 'comunicados', 'modelosComunicado', 'duplicadosIgnorados', 'ocorrenciasProfessor', 'horasAula'];
+  const CHAVES_SYNC = ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'despesasUnifecaf', 'pendencias', 'comunicados', 'modelosComunicado', 'duplicadosIgnorados', 'ocorrenciasProfessor', 'horasAula', 'salas'];
   const LS = {
     get: function (k, def) { try { const v = localStorage.getItem('washington.' + k); return v == null ? def : JSON.parse(v); } catch (e) { return def; } },
     set: function (k, v) {
@@ -9212,6 +9271,7 @@ window.FIREBASE_CONFIG = {
     duplicadosIgnorados: LS.get('duplicadosIgnorados', []),
     ocorrenciasProfessor: LS.get('ocorrenciasProfessor', []),
     horasAula: LS.get('horasAula', []),
+    salas: LS.get('salas', null),
   };
 
   /* ---------- Garante que alunos já salvos (ou sincronizados de outro navegador) antes destes
@@ -9298,6 +9358,38 @@ window.FIREBASE_CONFIG = {
   normalizarValorHoraAulaProfessores();
   normalizarValoresMoeda();
 
+  /* ---------- Salas ----------
+     Cadastro próprio (nome, capacidade, observações, status e uma cor fixa). As turmas continuam
+     guardando o nome da sala, como sempre. Enquanto ninguém salvou o cadastro, ele é montado a
+     partir das salas que as turmas já usam, só na memória: assim este navegador não sobrescreve
+     um cadastro que outra pessoa já tenha salvo e ainda não chegou pela sincronização. */
+  const CORES_SALA = ['#1565c0', '#d9480f', '#0f8a6b', '#7b3fd1', '#b8860b', '#c2255c', '#0e7c96', '#5c8a12', '#a94442', '#3f51b5', '#8d5524', '#2f9e44'];
+  function garantirSalas() {
+    if (Array.isArray(S.salas)) { D.salasDerivadas = false; S.salas.forEach(normalizarSala); return; }
+    const nomes = Array.from(new Set(S.turmas.map(function (t) { return (t.sala || '').trim(); }).filter(Boolean)))
+      .sort(function (a, b) { return L.norm(a).localeCompare(L.norm(b), 'pt-BR', { numeric: true }); });
+    S.salas = nomes.map(function (n, i) {
+      return { id: 'sala' + (i + 1), nome: n, capacidade: L.salaOnline(n) ? '' : String(VAGAS_POR_TURMA_SALAS), obs: '', status: 'Ativa', cor: CORES_SALA[i % CORES_SALA.length] };
+    });
+    D.salasDerivadas = true;
+  }
+  function normalizarSala(x, i) {
+    if (!x.id) x.id = 'sala' + Date.now().toString(36) + i;
+    if (!x.status) x.status = 'Ativa';
+    if (x.capacidade == null) x.capacidade = '';
+    if (x.obs == null) x.obs = '';
+    if (!x.cor) x.cor = CORES_SALA[i % CORES_SALA.length];
+  }
+  function salvarSalas() { LS.set('salas', S.salas); D.salasDerivadas = false; }
+  function salaPorNome(nome) { const k = L.norm(nome); return S.salas.find(function (x) { return L.norm(x.nome) === k; }) || null; }
+  function corDaSala(nome) { const x = salaPorNome(nome); return x ? x.cor : '#6e7e8c'; }
+  const VAGAS_POR_TURMA_SALAS = 12;
+  /* Professores: e-mail, especialidade e status (Ativo/Inativo) entraram depois. */
+  function normalizarCamposProfessores() {
+    S.professores.forEach(function (p) { if (p.email == null) p.email = ''; if (p.especialidade == null) p.especialidade = ''; if (!p.status) p.status = 'Ativo'; });
+  }
+
+
   /* ---------- Migração: traz dados novos (ex.: telefone/e-mail importados) sem apagar edições manuais ---------- */
   (function migrarDadosPadrao() {
     const versaoNova = DATA.versaoDados || 0;
@@ -9350,11 +9442,14 @@ window.FIREBASE_CONFIG = {
     novoProfessor: { nome: '', telefone: '' },
     novaOcorrenciaProfessor: { professor: '', tipo: 'falta', data: HOJE, obs: '' }, fProfOcorrencia: '',
     semProfsOcultos: {},
+    salasModo: 'calendario', salasSemana: null, salasDia: '', novaSala: { nome: '', capacidade: '12', obs: '', status: 'Ativa' }, mover: null, etValido: true,
     pontoDesloc: 0, pontoRegs: null, pontoErro: '', pontoPins: null, pontoPinsCarregando: false,
     pontoManual: { profId: '', data: HOJE, entrada: '', saida: '', turma: '' },
     logado: !Sync.configured(), authEmail: '', loginEmail: '', loginSenha: '', loginErro: '', loginCarregando: false,
   };
   const D = {};
+  garantirSalas();
+  normalizarCamposProfessores();
 
   /* ---------- Notificação no navegador de novo compromisso ---------- */
   /* Guarda quais compromissos este navegador já "viu" (os que já existiam no boot, mais os que
@@ -9449,11 +9544,12 @@ window.FIREBASE_CONFIG = {
     email: '<rect x="2.5" y="4.5" width="19" height="15" rx="2.5"/><path d="m3.5 6 7.3 5.7a1.8 1.8 0 0 0 2.4 0L20.5 6"/>',
     cadeado: '<rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M7.5 10.5V7a4.5 4.5 0 0 1 9 0v3.5"/>',
     ponto: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    salas: '<path d="M4 21V5a2 2 0 0 1 2-2h9l3 3v15"/><path d="M2 21h20"/><circle cx="13.5" cy="12.5" r=".8" fill="currentColor"/>',
     cancelados: '<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7"/><path d="m8.5 17.5 7 4M15.5 17.5l-7 4"/>'
   };
   const VIEWS = [
     { id: 'geral', nome: 'Visão geral' },
-    { id: 'semana', nome: 'Semana' }, { id: 'pendencias', nome: 'Pendências' }, { id: 'turmas', nome: 'Turmas' }, { id: 'matriculas', nome: 'Matrículas' },
+    { id: 'semana', nome: 'Semana' }, { id: 'pendencias', nome: 'Pendências' }, { id: 'turmas', nome: 'Turmas' }, { id: 'salas', nome: 'Salas' }, { id: 'matriculas', nome: 'Matrículas' },
     { id: 'compromissos', nome: 'Compromissos' }, { id: 'frequencia', nome: 'Frequência' }, { id: 'inadimplencia', nome: 'Inadimplência' },
     { id: 'material', nome: 'Material' }, { id: 'entradas', nome: 'Entradas' }, { id: 'despesas', nome: 'Despesas' }, { id: 'despesasUnifecaf', nome: 'Despesas UniFECAF' },
     { id: 'alunos', nome: 'Alunos' }, { id: 'comunicados', nome: 'Comunicados' },
@@ -9597,7 +9693,7 @@ window.FIREBASE_CONFIG = {
     const foco = capturarFoco(app);
     app.innerHTML = ({
       geral: viewVisaoGeral,
-      semana: viewSemana, pendencias: viewPendencias, turmas: viewTurmas, matriculas: viewMatriculas, compromissos: viewCompromissos,
+      semana: viewSemana, pendencias: viewPendencias, turmas: viewTurmas, salas: viewSalas, matriculas: viewMatriculas, compromissos: viewCompromissos,
       frequencia: viewFrequencia, inadimplencia: viewInadimplencia, material: viewMaterial, entradas: viewEntradas, despesas: viewDespesas, despesasUnifecaf: viewDespesasUnifecaf,
       alunos: viewAlunos, comunicados: viewComunicados, professores: viewProfessores, ponto: viewPonto, ocorrencias: viewOcorrencias,
       conferencia: viewConferencia, buscar: viewBuscar, dados: viewDados
@@ -9732,6 +9828,7 @@ window.FIREBASE_CONFIG = {
       statTileLink(pendAtrasadas.length, 'pendência(s) atrasada(s)', 'pendencias') +
       statTileLink(despAtrasadas.length, 'despesa(s) atrasada(s)', 'despesas') +
       '</div>' +
+      (function () { const ag = salasAgora(); return '<p class="muted">Salas agora: ' + ag.livres.length + ' livre(s) · ' + ag.ocupadas.length + ' ocupada(s)' + (ag.ocupadas.length ? (' (' + esc(ag.ocupadas.map(function (x) { return x.nome; }).join(', ')) + ')') : '') + ' · <button class="link" type="button" data-act="salas-modo" data-m="ocupacao">ver ocupação das salas</button></p>'; })() +
       '<p class="muted">Saldo de ' + esc(nomeMes(mesAtual)) + ': entradas ' + fmtReais(entradasMes) + ' · despesas ' + fmtReais(despesasMes) + ' · ' + saldoTag(entradasMes - despesasMes) + '</p>' +
       (aniversariantesSemana.length ? ('<h2 class="subtitulo">Aniversariantes na semana (' + aniversariantesSemana.length + ')</h2>' + aniversariantesSemana.map(cardAlunoAniversario).join('')) : '') +
       (rematriculas.length ? ('<h2 class="subtitulo">Rematrículas vencendo (' + rematriculas.length + ')</h2>' + rematriculas.slice(0, 5).map(cardAlunoRematriculaProxima).join('') +
@@ -9933,25 +10030,338 @@ window.FIREBASE_CONFIG = {
 
   /* ---------- Criar / editar / excluir turma ---------- */
   const SITUACOES_TURMA = ['Em andamento', 'Em formação', 'A confirmar', 'Finalizada', 'Não formou turma'];
+  /* ---------- Cadastro/edição de turma, com checagem de choque de sala e de professor ----------
+     Dias por caixinhas, horário por início/fim, professor e sala escolhidos dos cadastros. O botão
+     Salvar fica bloqueado enquanto houver choque, e o choque é conferido de novo na hora de salvar. */
+  const DIAS_TURMA = ['SEG', 'TER', 'QUA', 'QUI', 'SEX', 'SÁB', 'DOM'];
+  function hhmmDeMin(m) { return String(Math.floor(m / 60)).padStart(2, '0') + ':' + String(m % 60).padStart(2, '0'); }
+  function minDeHHMM(v) { const m = /^(\d{1,2}):(\d{2})$/.exec(String(v || '').trim()); return m ? Number(m[1]) * 60 + Number(m[2]) : null; }
+  function professoresParaSelect(atual) {
+    const lista = S.professores.filter(function (p) { return p.status !== 'Inativo' || L.norm(p.nome) === L.norm(atual); }).map(function (p) { return p.nome; });
+    if (atual && !lista.some(function (n) { return L.norm(n) === L.norm(atual); })) lista.push(atual);
+    return lista.sort(function (x, y) { return L.norm(x).localeCompare(L.norm(y)); });
+  }
+  function salasParaSelect(atual) {
+    const lista = S.salas.filter(function (x) { return x.status !== 'Inativa' || L.norm(x.nome) === L.norm(atual); }).map(function (x) { return x.nome; });
+    if (atual && !lista.some(function (n) { return L.norm(n) === L.norm(atual); })) lista.push(atual);
+    return lista;
+  }
+  function checksDias(prefixo, marcados, act) {
+    return '<div class="dias-check" role="group" aria-label="Dias da semana">' + DIAS_TURMA.map(function (d) {
+      const on = marcados.indexOf(d) > -1;
+      return '<label class="' + (on ? 'on' : '') + '"><input type="checkbox" id="' + prefixo + '-' + d + '" value="' + d + '" data-act="' + act + '"' + (on ? ' checked' : '') + '> ' + d.charAt(0) + d.slice(1).toLowerCase() + '</label>';
+    }).join('') + '</div>';
+  }
+  function lerDiasChecks(prefixo) { return DIAS_TURMA.filter(function (d) { const c = $('#' + prefixo + '-' + d); return c && c.checked; }); }
   function dlgEditarTurma(id) {
     const t = id ? D.turmaPorId[id] : null;
+    const hm = t ? L.horarioMin(t.horario) : null;
+    const diasT = t ? L.diasDaTurma(t.dia) : [];
     abrirDlg('<article class="dlg-card"><header><h2>' + (t ? 'Editar turma' : 'Nova turma') + '</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header>' +
       '<div class="dlg-corpo">' +
       '<div class="campos-matricula">' +
-      '<div class="campo"><label>Nome da turma</label><input type="text" id="et-turma" value="' + esc(t ? t.turma : '') + '" placeholder="Ex.: Kids 5"></div>' +
-      '<div class="campo"><label>Semestre</label><input type="text" id="et-semestre" value="' + esc(t ? t.semestre : V.semestre) + '" placeholder="Ex.: 2026.2"></div>' +
-      '<div class="campo"><label>Dia(s) da semana</label><input type="text" id="et-dia" value="' + esc(t ? t.dia : '') + '" placeholder="Ex.: SEG/QUA"></div>' +
-      '<div class="campo"><label>Horário</label><input type="text" id="et-horario" value="' + esc(t ? t.horario : '') + '" placeholder="Ex.: 18h - 19h"></div>' +
-      '<div class="campo"><label>Professor(a)</label><input type="text" id="et-professor" value="' + esc(t ? (t.professor || '') : '') + '" placeholder="Nome do(a) professor(a)"></div>' +
-      '<div class="campo"><label>Sala</label><input type="text" id="et-sala" value="' + esc(t ? (t.sala || '') : '') + '" placeholder="Ex.: Sala 2"></div>' +
-      '<div class="campo"><label>Situação</label><select id="et-situacao">' + SITUACOES_TURMA.map(function (s) { return '<option value="' + esc(s) + '"' + (t && t.situacao === s ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="campo"><label for="et-turma">Nome da turma</label><input type="text" id="et-turma" value="' + esc(t ? t.turma : '') + '" placeholder="Ex.: Kids 5" data-act="et-validar"></div>' +
+      '<div class="campo"><label for="et-semestre">Semestre</label><input type="text" id="et-semestre" value="' + esc(t ? t.semestre : V.semestre) + '" placeholder="Ex.: 2026.2" data-act="et-validar"></div>' +
+      '<div class="campo"><label for="et-professor">Professor(a)</label><select id="et-professor" data-act="et-validar"><option value="">— Escolha —</option>' + professoresParaSelect(t ? t.professor : '').map(function (n) { return '<option value="' + esc(n) + '"' + (t && L.norm(t.professor) === L.norm(n) ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="campo"><label for="et-sala">Sala</label><select id="et-sala" data-act="et-validar"><option value="">— Escolha —</option>' + salasParaSelect(t ? t.sala : '').map(function (n) { const x = salaPorNome(n); return '<option value="' + esc(n) + '"' + (t && L.norm(t.sala) === L.norm(n) ? ' selected' : '') + '>' + esc(n) + (x && x.capacidade ? (' (' + esc(x.capacidade) + ' lugares)') : '') + '</option>'; }).join('') + '</select></div>' +
+      '<div class="campo"><label for="et-ini">Início</label><input type="time" id="et-ini" value="' + (hm ? hhmmDeMin(hm[0]) : '') + '" data-act="et-validar"></div>' +
+      '<div class="campo"><label for="et-fim">Fim</label><input type="time" id="et-fim" value="' + (hm ? hhmmDeMin(hm[1]) : '') + '" data-act="et-validar"></div>' +
+      '<div class="campo"><label for="et-situacao">Situação</label><select id="et-situacao" data-act="et-validar">' + SITUACOES_TURMA.map(function (s) { return '<option value="' + esc(s) + '"' + (t && t.situacao === s ? ' selected' : '') + '>' + esc(s) + '</option>'; }).join('') + '</select></div>' +
       '</div>' +
-      '<div class="campo"><label>Observação</label><input type="text" id="et-obs" value="' + esc(t ? (t.obs || '') : '') + '" placeholder="Opcional"></div>' +
+      '<div class="campo"><label>Dias da semana</label>' + checksDias('et-dia', diasT, 'et-validar') + '</div>' +
+      '<div class="campo"><label for="et-obs">Observação</label><input type="text" id="et-obs" value="' + esc(t ? (t.obs || '') : '') + '" placeholder="Opcional"></div>' +
+      '<div id="et-validacao" aria-live="polite"></div>' +
       '<div class="ct-acoes">' +
-      '<button class="btn sm on" type="button" data-act="salvar-turma" data-id="' + (t ? t.id : '') + '">Salvar</button>' +
+      '<button class="btn sm on" type="button" id="et-salvar" data-act="salvar-turma" data-id="' + (t ? t.id : '') + '">Salvar</button>' +
       (t ? ('<button class="btn sm" type="button" data-act="excluir-turma" data-id="' + t.id + '">Excluir turma</button>') : '') +
       '</div></div></article>');
+    validarDlgTurma();
   }
+  function rascunhoDlgTurma() {
+    const ini = minDeHHMM($('#et-ini').value), fim = minDeHHMM($('#et-fim').value);
+    const id = $('#et-salvar').dataset.id;
+    return {
+      id: id || '__novo__', turma: $('#et-turma').value.trim(), semestre: $('#et-semestre').value.trim(),
+      dia: lerDiasChecks('et-dia').join('/'), horario: (ini != null && fim != null) ? L.fmtHorarioTurma(ini, fim) : '',
+      professor: $('#et-professor').value, sala: $('#et-sala').value, situacao: $('#et-situacao').value, obs: $('#et-obs').value.trim(),
+      _ini: ini, _fim: fim, _alunos: id && D.turmaPorId[id] ? (D.turmaPorId[id].alunosNomes || []).length : 0,
+    };
+  }
+  function examinarRascunhoTurma(r) {
+    const erros = [], avisos = [];
+    if (!r.turma) erros.push('Informe o nome da turma.');
+    if (!/^\d{4}\.[12]$/.test(r.semestre)) erros.push('Semestre no formato 2026.2.');
+    if (!r.dia) erros.push('Marque pelo menos um dia da semana.');
+    if (r._ini == null || r._fim == null || r._fim <= r._ini) erros.push('O horário de fim precisa ser depois do início.');
+    const sala = salaPorNome(r.sala);
+    if (sala && sala.capacidade && r._alunos > Number(sala.capacidade)) avisos.push('A turma tem ' + r._alunos + ' alunos e a ' + sala.nome + ' comporta ' + sala.capacidade + '.');
+    const conflitos = erros.length ? [] : L.conflitosTurma(r, S.turmas);
+    return { erros: erros, avisos: avisos, conflitos: conflitos };
+  }
+  function textoChoque(c, r) {
+    const o = c.outra;
+    return (c.tipo === 'sala' ? ('<b>' + esc(r.sala) + '</b> já está ocupada') : ('<b>' + esc(r.professor) + '</b> já tem aula')) +
+      ' com <b>' + esc(o.turma) + '</b> (' + esc(c.dias.join('/')) + ' ' + esc(o.horario) + (c.tipo === 'sala' ? (' · ' + esc(o.professor || '—')) : (' · ' + esc(o.sala || 'sem sala'))) + ')';
+  }
+  /* Salas ativas, com lugar para os alunos da turma, sem choque de sala nesses dias e horário. */
+  function salasLivresParaRascunho(r) {
+    return S.salas.filter(function (x) {
+      if (x.status === 'Inativa' || L.salaOnline(x.nome) || L.norm(x.nome) === L.norm(r.sala)) return false;
+      if (x.capacidade && r._alunos > Number(x.capacidade)) return false;
+      return !L.conflitosTurma(Object.assign({}, r, { sala: x.nome, professor: '' }), S.turmas).length;
+    });
+  }
+  function htmlValidacaoTurma(r, ex, actSala) {
+    let h = '';
+    if (ex.conflitos.length) h += '<div class="aviso aviso-erro"><p><b>Choque de horário: não dá para salvar.</b></p><ul>' + ex.conflitos.map(function (c) { return '<li>' + textoChoque(c, r) + '</li>'; }).join('') + '</ul></div>';
+    if (!ex.erros.length && L.turmaOcupaHorario(r) && (ex.conflitos.some(function (c) { return c.tipo === 'sala'; }) || ex.avisos.length || !r.sala)) {
+      const livres = salasLivresParaRascunho(r);
+      h += '<div class="aviso aviso-atencao"><p><b>Salas livres nesses dias e horário' + (r._alunos ? (', com lugar para ' + r._alunos + ' alunos') : '') + ':</b></p>' +
+        (livres.length ? ('<div class="ct-acoes">' + livres.map(function (x) { return '<button class="btn sm" type="button" data-act="' + actSala + '" data-sala="' + esc(x.nome) + '"><span class="sala-dot" style="background:' + esc(x.cor) + '"></span>' + esc(x.nome) + (x.capacidade ? (' · ' + esc(x.capacidade) + ' lugares') : '') + '</button>'; }).join('') + '</div>') : '<p>Nenhuma sala livre. Tente outro dia ou horário.</p>') + '</div>';
+    }
+    if (ex.avisos.length) h += '<div class="aviso aviso-atencao"><p>' + ex.avisos.map(esc).join('<br>') + '</p></div>';
+    if (ex.erros.length) h += '<div class="aviso aviso-atencao"><p>' + ex.erros.map(esc).join('<br>') + '</p></div>';
+    if (!ex.erros.length && !ex.conflitos.length) h += '<p class="ok-linha">✓ Sem choque de sala ou de professor' + (L.turmaOcupaHorario(r) ? '' : ' (turma ' + esc(r.situacao.toLowerCase()) + ' não ocupa horário)') + '.</p>';
+    return h;
+  }
+  function validarDlgTurma() {
+    if (!$('#et-validacao')) return;
+    DIAS_TURMA.forEach(function (d) { const c = $('#et-dia-' + d); if (c) c.parentNode.className = c.checked ? 'on' : ''; });
+    const r = rascunhoDlgTurma(), ex = examinarRascunhoTurma(r);
+    $('#et-validacao').innerHTML = htmlValidacaoTurma(r, ex, 'et-usar-sala');
+    $('#et-salvar').disabled = ex.erros.length > 0 || ex.conflitos.length > 0;
+  }
+
+  /* ---------- Salas: calendário por sala, ocupação e cadastro ---------- */
+  const SALAS_CAL_INICIO = '2026-08-03', SALAS_CAL_FIM = '2026-12-28'; /* segundas de agosto a dezembro de 2026 */
+  function salasTotalSemanas() { return Math.round((new Date(SALAS_CAL_FIM + 'T00:00:00') - new Date(SALAS_CAL_INICIO + 'T00:00:00')) / (7 * 864e5)) + 1; }
+  function salasSemanaAtual() {
+    if (V.salasSemana != null) return V.salasSemana;
+    const seg = L.segundaDaSemana(HOJE);
+    const i = Math.round((new Date(seg + 'T00:00:00') - new Date(SALAS_CAL_INICIO + 'T00:00:00')) / (7 * 864e5));
+    return Math.max(0, Math.min(salasTotalSemanas() - 1, i));
+  }
+  function turmasQueOcupam(semestre) { return S.turmas.filter(function (t) { return t.semestre === semestre && L.turmaOcupaHorario(t) && L.horarioMin(t.horario); }); }
+  function minutosSemana(t) { const h = L.horarioMin(t.horario); return h ? (h[1] - h[0]) * L.diasDaTurma(t.dia).length : 0; }
+  const JANELA_SALA_H = 6 * 14; /* seg a sáb, 8h às 22h */
+  function viewSalas() {
+    const modos = [['calendario', 'Calendário'], ['ocupacao', 'Ocupação'], ['cadastro', 'Cadastro de salas']];
+    const botoes = modos.map(function (m) { return '<button class="btn sm' + (V.salasModo === m[0] ? ' on' : '') + '" type="button" data-act="salas-modo" data-m="' + m[0] + '">' + m[1] + '</button>'; }).join('');
+    const corpo = V.salasModo === 'ocupacao' ? viewSalasOcupacao() : V.salasModo === 'cadastro' ? viewSalasCadastro() : viewSalasCalendario();
+    return '<div class="topo"><h1>Salas</h1><div class="topo-acoes">' + botoes + '</div></div>' +
+      (D.salasDerivadas ? '<p class="aviso aviso-atencao" style="margin:0 0 .8rem">As salas abaixo vieram das turmas. Confira a capacidade de cada uma em <button class="link" type="button" data-act="salas-modo" data-m="cadastro">Cadastro de salas</button> e salve: a capacidade é usada para sugerir sala livre.</p>' : '') + corpo;
+  }
+  function viewSalasCalendario() {
+    const semana = salasSemanaAtual(), seg = L.somaDias(SALAS_CAL_INICIO, semana * 7);
+    const diaSel = V.salasDia || (L.diaDaSemana(HOJE) === 'DOM' ? 'SEG' : L.diaDaSemana(HOJE));
+    const idx = DIAS_TURMA.indexOf(diaSel), data = L.somaDias(seg, idx);
+    const semestre = L.semestreDeData(data);
+    const todas = turmasQueOcupam(semestre);
+    const doDia = todas.filter(function (t) { return L.diasDaTurma(t.dia).indexOf(diaSel) > -1; });
+    const marcosObj = {};
+    todas.forEach(function (t) { const h = L.horarioMin(t.horario); marcosObj[h[0]] = 1; marcosObj[h[1]] = 1; });
+    let marcos = Object.keys(marcosObj).map(Number).sort(function (a, b) { return a - b; });
+    if (marcos.length < 2) { marcos = []; for (let m = 8 * 60; m <= 22 * 60; m += 60) marcos.push(m); }
+    const cols = S.salas.filter(function (x) { return x.status !== 'Inativa'; }).map(function (x) { return { nome: x.nome, cor: x.cor, cap: x.capacidade }; });
+    doDia.forEach(function (t) {
+      const n = (t.sala || '').trim();
+      if (!cols.some(function (c) { return L.norm(c.nome) === L.norm(n); })) cols.push({ nome: n, cor: n ? corDaSala(n) : '#8a96a3', cap: '', semCadastro: true });
+    });
+    const diasBtns = DIAS_TURMA.map(function (d, i) {
+      const dt = L.somaDias(seg, i);
+      const n = turmasQueOcupam(L.semestreDeData(dt)).filter(function (t) { return L.diasDaTurma(t.dia).indexOf(d) > -1; }).length;
+      return '<button class="btn sm' + (d === diaSel ? ' on' : '') + '" type="button" data-act="salas-dia" data-d="' + d + '">' + L.DIAS_FULL[d] + ' <span class="muted-inline">' + L.fmtCurta(dt) + ' · ' + n + '</span></button>';
+    }).join('');
+    let h = '<div class="filtros salas-nav">' +
+      '<button class="btn sm" type="button" data-act="salas-semana" data-d="-1"' + (semana <= 0 ? ' disabled' : '') + '>← Semana anterior</button>' +
+      '<b>Semana de ' + L.fmtCurta(seg) + ' a ' + L.fmtCurta(L.somaDias(seg, 6)) + '</b>' +
+      '<button class="btn sm" type="button" data-act="salas-semana" data-d="1"' + (semana >= salasTotalSemanas() - 1 ? ' disabled' : '') + '>Próxima semana →</button>' +
+      '<button class="btn sm" type="button" data-act="salas-semana" data-d="0">Hoje</button>' +
+      '<span class="muted">semestre ' + esc(semestre) + '</span></div>' +
+      '<div class="filtros">' + diasBtns + '</div>';
+    if (!cols.length) return h + '<p class="muted">Cadastre pelo menos uma sala ativa.</p>';
+    const nLin = marcos.length - 1;
+    h += '<div class="sc-wrap"><div class="sc-grade" style="grid-template-columns:4.2rem ' + cols.map(function (c) { const n = colunaFaixas(doDia, c.nome); return 'minmax(' + (9.5 * Math.max(1, n)) + 'rem,' + Math.max(1, n) + 'fr)'; }).join(' ') + ';grid-template-rows:auto repeat(' + nLin + ', minmax(2.9rem,auto))">';
+    h += '<div class="sc-hd sc-hora" style="grid-row:1;grid-column:1">Hora</div>';
+    cols.forEach(function (c, ci) {
+      h += '<div class="sc-hd" style="grid-row:1;grid-column:' + (ci + 2) + ';box-shadow:inset 0 3px 0 ' + esc(c.cor) + '"><span class="sala-dot" style="background:' + esc(c.cor) + '"></span>' + esc(c.nome || 'Sem sala') + '<small>' + (c.cap ? esc(c.cap) + ' lugares' : (c.semCadastro ? 'fora do cadastro' : '&nbsp;')) + '</small></div>';
+    });
+    for (let r = 0; r < nLin; r++) {
+      h += '<div class="sc-horacel" style="grid-row:' + (r + 2) + ';grid-column:1">' + esc(L.fmtHoraTurma(marcos[r])) + '</div>';
+      cols.forEach(function (c, ci) { h += '<div class="sc-cel" style="grid-row:' + (r + 2) + ';grid-column:' + (ci + 2) + '" data-sala="' + esc(c.nome) + '"></div>'; });
+    }
+    /* Turmas que se sobrepõem na mesma coluna (choque antigo ou "Sem sala") ficam lado a lado. */
+    const faixas = {};
+    doDia.slice().sort(function (a, b) { return L.horarioMin(a.horario)[0] - L.horarioMin(b.horario)[0]; }).forEach(function (t) {
+      const k = L.norm((t.sala || '').trim()), hm = L.horarioMin(t.horario);
+      const grupo = faixas[k] = faixas[k] || [];
+      let faixa = grupo.findIndex(function (fim) { return fim <= hm[0]; });
+      if (faixa < 0) { faixa = grupo.length; grupo.push(hm[1]); } else grupo[faixa] = hm[1];
+      t._faixa = faixa;
+    });
+    doDia.forEach(function (t) {
+      const ci = cols.findIndex(function (c) { return L.norm(c.nome) === L.norm((t.sala || '').trim()); });
+      const hm = L.horarioMin(t.horario);
+      const r0 = marcos.indexOf(hm[0]), r1 = marcos.indexOf(hm[1]);
+      if (ci < 0 || r0 < 0 || r1 <= r0) return;
+      const nF = (faixas[L.norm((t.sala || '').trim())] || [0]).length;
+      const larg = nF > 1 ? (';justify-self:start;width:calc(' + (100 / nF).toFixed(3) + '% - 6px);margin-left:calc(' + (t._faixa * 100 / nF).toFixed(3) + '% + 3px)') : '';
+      const provisoria = /forma|confirmar/i.test(t.situacao || '');
+      h += '<div class="sc-bloco' + (provisoria ? ' provisoria' : '') + '" draggable="true" role="button" tabindex="0" data-act="sc-abrir" data-turma="' + t.id + '" data-sala="' + esc(cols[ci].nome) + '" style="grid-row:' + (r0 + 2) + '/' + (r1 + 2) + ';grid-column:' + (ci + 2) + ';background:' + esc(cols[ci].cor) + larg + '" title="Arraste para outra sala · clique para abrir a turma">' +
+        '<b>' + esc(t.turma) + '</b><span>' + esc(t.professor || '—') + '</span><span>' + esc(t.horario) + ' · ' + (t.alunosNomes || []).length + ' al.' + (provisoria ? ' · ' + esc(t.situacao) : '') + '</span></div>';
+    });
+    h += '</div></div><p class="muted">Arraste um bloco para outra sala: abre uma janela para escolher os dias, com checagem de choque. Clique no bloco para abrir a turma. Listrado = em formação ou a confirmar. Turmas finalizadas e que não formaram não aparecem.</p>';
+    return h;
+  }
+  function colunaFaixas(lista, nome) {
+    const fins = [];
+    lista.filter(function (t) { return L.norm((t.sala || '').trim()) === L.norm(nome); })
+      .sort(function (a, b) { return L.horarioMin(a.horario)[0] - L.horarioMin(b.horario)[0]; })
+      .forEach(function (t) { const hm = L.horarioMin(t.horario); const i = fins.findIndex(function (f) { return f <= hm[0]; }); if (i < 0) fins.push(hm[1]); else fins[i] = hm[1]; });
+    return fins.length;
+  }
+  function salasAgora() {
+    const agora = new Date(), min = agora.getHours() * 60 + agora.getMinutes(), dia = L.diaDaSemana(HOJE);
+    const ativas = S.salas.filter(function (x) { return x.status !== 'Inativa' && !L.salaOnline(x.nome); });
+    const ocupadas = ativas.filter(function (x) {
+      return turmasQueOcupam(L.semestreDeData(HOJE)).some(function (t) { const h = L.horarioMin(t.horario); return L.norm(t.sala) === L.norm(x.nome) && L.diasDaTurma(t.dia).indexOf(dia) > -1 && h[0] <= min && min < h[1]; });
+    });
+    return { ativas: ativas, ocupadas: ocupadas, livres: ativas.filter(function (x) { return ocupadas.indexOf(x) < 0; }) };
+  }
+  function viewSalasOcupacao() {
+    const semestre = L.semestreDeData(HOJE), ag = salasAgora();
+    const ts = turmasQueOcupam(semestre);
+    const turmasAtivas = S.turmas.filter(function (t) { return t.semestre === semestre && /andamento/i.test(t.situacao || ''); }).length;
+    const profsAtivos = S.professores.filter(function (p) { return p.status !== 'Inativo'; }).length;
+    let h = '<div class="stats-topo">' +
+      statTileLink(ag.livres.length, 'sala(s) livre(s) agora', 'salas') +
+      statTileLink(ag.ocupadas.length, 'sala(s) ocupada(s) agora' + (ag.ocupadas.length ? (': ' + ag.ocupadas.map(function (x) { return x.nome; }).join(', ')) : ''), 'salas') +
+      statTileLink(turmasAtivas, 'turma(s) em andamento · ' + semestre, 'turmas') +
+      statTileLink(profsAtivos, 'professor(es) ativo(s)', 'professores') + '</div>';
+    const linhas = S.salas.filter(function (x) { return x.status !== 'Inativa'; }).map(function (x) {
+      const mins = ts.filter(function (t) { return L.norm(t.sala) === L.norm(x.nome); }).reduce(function (s2, t) { return s2 + minutosSemana(t); }, 0);
+      const pct = Math.min(100, Math.round(mins / 60 / JANELA_SALA_H * 100));
+      return '<div class="barra-linha"><span class="barra-lbl"><span class="sala-dot" style="background:' + esc(x.cor) + '"></span>' + esc(x.nome) + '</span><span class="barra"><i style="width:' + pct + '%;background:' + esc(x.cor) + '"></i></span><span class="barra-v">' + pct + '% · ' + fmtMinH(mins) + '</span></div>';
+    }).join('');
+    const porNivel = {};
+    ts.forEach(function (t) { const n = String(t.turma || '').replace(/\s*\d+.*$/, '').replace(/\s+VIP$/i, '').trim() || 'Outras'; porNivel[n] = (porNivel[n] || 0) + 1; });
+    const niveis = Object.keys(porNivel).sort(function (a, b) { return porNivel[b] - porNivel[a]; });
+    const maxN = niveis.length ? porNivel[niveis[0]] : 1;
+    h += '<div class="duas-colunas"><section class="bloco"><h2>Ocupação por sala · ' + esc(semestre) + '</h2><p class="muted">Horas por semana das turmas que ocupam horário, sobre ' + JANELA_SALA_H + 'h (seg a sáb, 8h às 22h).</p>' + (linhas || '<p class="muted">Nenhuma sala ativa.</p>') + '</section>' +
+      '<section class="bloco"><h2>Turmas por nível · ' + esc(semestre) + '</h2>' + niveis.map(function (n) { return '<div class="barra-linha"><span class="barra-lbl">' + esc(n) + '</span><span class="barra"><i style="width:' + Math.round(porNivel[n] / maxN * 100) + '%;background:var(--brand)"></i></span><span class="barra-v">' + porNivel[n] + ' turma(s)</span></div>'; }).join('') + '</section></div>';
+    const prox = proximasAulasSalas(10);
+    h += '<section class="bloco"><h2>Próximas turmas</h2>' + (prox.length ? ('<table class="tabela"><thead><tr><th>Quando</th><th>Horário</th><th>Turma</th><th>Professor</th><th>Sala</th><th>Alunos</th></tr></thead><tbody>' + prox.map(function (p) {
+      const t = p.t;
+      return '<tr><td>' + esc(p.rotulo) + '</td><td>' + esc(t.horario) + '</td><td><b>' + esc(t.turma) + '</b></td><td>' + esc(t.professor || '—') + '</td><td><span class="sala-dot" style="background:' + esc(corDaSala(t.sala)) + '"></span>' + esc(t.sala || 'Sem sala') + '</td><td>' + (t.alunosNomes || []).length + '</td></tr>';
+    }).join('') + '</tbody></table>') : '<p class="muted">Nenhuma aula nos próximos dias.</p>') + '</section>';
+    return h;
+  }
+  function fmtMinH(m) { return Math.floor(m / 60) + 'h' + (m % 60 ? String(m % 60).padStart(2, '0') : ''); }
+  function proximasAulasSalas(limite) {
+    const agora = new Date(), minAgora = agora.getHours() * 60 + agora.getMinutes(), lista = [];
+    for (let i = 0; i < 7; i++) {
+      const data = L.somaDias(HOJE, i), dia = L.diaDaSemana(data);
+      turmasQueOcupam(L.semestreDeData(data)).forEach(function (t) {
+        const h = L.horarioMin(t.horario);
+        if (L.diasDaTurma(t.dia).indexOf(dia) < 0 || (i === 0 && h[1] <= minAgora)) return;
+        lista.push({ t: t, chave: data + String(h[0]).padStart(4, '0'), rotulo: i === 0 ? 'Hoje' : i === 1 ? 'Amanhã' : (L.DIAS_FULL[dia] + ' ' + L.fmtCurta(data)) });
+      });
+      if (lista.length >= limite * 3) break;
+    }
+    return lista.sort(function (a, b) { return a.chave < b.chave ? -1 : 1; }).slice(0, limite);
+  }
+  function viewSalasCadastro() {
+    const ns = V.novaSala;
+    const semestre = L.semestreDeData(HOJE);
+    return '<section class="bloco"><h2>Nova sala</h2><div class="campos-matricula">' +
+      '<div class="campo"><label for="ns-nome">Nome</label><input type="text" id="ns-nome" data-act="ns-campo" data-campo="nome" value="' + esc(ns.nome) + '" placeholder="Ex.: Sala 5"></div>' +
+      '<div class="campo"><label for="ns-cap">Capacidade (lugares)</label><input type="number" min="1" id="ns-cap" data-act="ns-campo" data-campo="capacidade" value="' + esc(ns.capacidade) + '"></div>' +
+      '<div class="campo"><label for="ns-status">Status</label><select id="ns-status" data-act="ns-campo" data-campo="status"><option' + (ns.status === 'Ativa' ? ' selected' : '') + '>Ativa</option><option' + (ns.status === 'Inativa' ? ' selected' : '') + '>Inativa</option></select></div>' +
+      '</div><div class="campo"><label for="ns-obs">Observações</label><input type="text" id="ns-obs" data-act="ns-campo" data-campo="obs" value="' + esc(ns.obs) + '" placeholder="Equipamentos, restrições…"></div>' +
+      '<button class="btn on" type="button" data-act="add-sala">Adicionar sala</button></section>' +
+      '<table class="tabela"><thead><tr><th>Sala</th><th>Capacidade</th><th>Turmas ' + esc(semestre) + '</th><th>Observações</th><th>Status</th><th></th></tr></thead><tbody>' +
+      S.salas.map(function (x) {
+        const n = turmasQueOcupam(semestre).filter(function (t) { return L.norm(t.sala) === L.norm(x.nome); }).length;
+        return '<tr><td><span class="sala-dot" style="background:' + esc(x.cor) + '"></span><b>' + esc(x.nome) + '</b></td><td>' + (x.capacidade ? esc(x.capacidade) : '—') + '</td><td>' + n + '</td><td class="muted">' + esc(x.obs || '—') + '</td><td>' + (x.status === 'Inativa' ? '<span class="tag tag-erro">Inativa</span>' : '<span class="tag tag-ok">Ativa</span>') + '</td>' +
+          '<td class="acoes-icone"><button class="btn sm" type="button" title="Editar" aria-label="Editar ' + esc(x.nome) + '" data-act="editar-sala" data-id="' + esc(x.id) + '">&#9998;</button> <button class="btn sm" type="button" title="Excluir" aria-label="Excluir ' + esc(x.nome) + '" data-act="excluir-sala" data-id="' + esc(x.id) + '">&#10006;</button></td></tr>';
+      }).join('') + '</tbody></table>';
+  }
+  function dlgSala(id) {
+    const x = S.salas.find(function (y) { return y.id === id; });
+    if (!x) return;
+    abrirDlg('<article class="dlg-card"><header><h2>Editar sala</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header><div class="dlg-corpo">' +
+      '<div class="campos-matricula">' +
+      '<div class="campo"><label for="es-nome">Nome</label><input type="text" id="es-nome" value="' + esc(x.nome) + '"></div>' +
+      '<div class="campo"><label for="es-cap">Capacidade (lugares)</label><input type="number" min="1" id="es-cap" value="' + esc(x.capacidade) + '"></div>' +
+      '<div class="campo"><label for="es-status">Status</label><select id="es-status"><option' + (x.status !== 'Inativa' ? ' selected' : '') + '>Ativa</option><option' + (x.status === 'Inativa' ? ' selected' : '') + '>Inativa</option></select></div>' +
+      '</div><div class="campo"><label for="es-obs">Observações</label><input type="text" id="es-obs" value="' + esc(x.obs || '') + '"></div>' +
+      '<p class="muted">Se mudar o nome, todas as turmas desta sala passam a usar o nome novo.</p>' +
+      '<div class="ct-acoes"><button class="btn sm on" type="button" data-act="salvar-sala" data-id="' + esc(x.id) + '">Salvar</button><button class="btn sm" type="button" data-act="fechar">Cancelar</button></div></div></article>');
+  }
+  function dlgExcluirSala(id) {
+    const x = S.salas.find(function (y) { return y.id === id; });
+    if (!x) return;
+    const semAtual = L.semestreDeData(HOJE);
+    const usando = S.turmas.filter(function (t) { return (t.semestre || '') >= semAtual && L.turmaOcupaHorario(t) && L.norm(t.sala) === L.norm(x.nome); });
+    abrirDlg('<article class="dlg-card"><header><h2>' + (usando.length ? 'Não dá para excluir' : 'Excluir sala?') + '</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header><div class="dlg-corpo">' +
+      (usando.length ? ('<p>' + usando.length + ' turma(s) ainda usam a ' + esc(x.nome) + ': ' + esc(usando.slice(0, 5).map(function (t) { return t.turma + ' (' + t.semestre + ')'; }).join(', ')) + (usando.length > 5 ? '…' : '') + '. Troque a sala dessas turmas antes, ou marque a sala como Inativa.</p><div class="ct-acoes"><button class="btn sm" type="button" data-act="fechar">Entendi</button></div>') :
+        ('<p>Excluir a <b>' + esc(x.nome) + '</b> do cadastro? Turmas de semestres anteriores que usaram essa sala continuam com o nome no histórico.</p><div class="ct-acoes"><button class="btn sm" type="button" data-act="confirmar-excluir-sala" data-id="' + esc(x.id) + '">&#10006; Excluir</button><button class="btn sm" type="button" data-act="fechar">Cancelar</button></div>')) +
+      '</div></article>');
+  }
+  /* Arrastar um bloco do calendário para outra sala: escolher os dias, com choque conferido na hora. */
+  function dlgMoverTurma(id, salaDestino) {
+    const t = D.turmaPorId[id];
+    if (!t) return;
+    V.mover = { id: id };
+    abrirDlg('<article class="dlg-card"><header><h2>Mover ' + esc(t.turma) + '</h2><button class="x" data-act="fechar" aria-label="Fechar">✕</button></header><div class="dlg-corpo">' +
+      '<p class="muted">' + esc(t.professor || '—') + ' · ' + esc(t.horario) + ' · ' + (t.alunosNomes || []).length + ' alunos · hoje: ' + esc(t.sala || 'sem sala') + ', ' + esc(t.dia) + '</p>' +
+      '<div class="campo"><label for="mv-sala">Nova sala</label><select id="mv-sala" data-act="mv-validar">' + salasParaSelect(salaDestino || t.sala).map(function (n) { return '<option value="' + esc(n) + '"' + (L.norm(n) === L.norm(salaDestino || t.sala) ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="campo"><label>Dias da semana</label>' + checksDias('mv-dia', L.diasDaTurma(t.dia), 'mv-validar') + '</div>' +
+      '<div id="mv-validacao" aria-live="polite"></div>' +
+      '<div class="ct-acoes"><button class="btn sm on" type="button" id="mv-salvar" data-act="mv-confirmar">Confirmar e salvar</button><button class="btn sm" type="button" data-act="fechar">Cancelar</button></div></div></article>');
+    validarMover();
+  }
+  function rascunhoMover() {
+    const t = D.turmaPorId[V.mover.id];
+    return Object.assign({}, t, { sala: $('#mv-sala').value, dia: lerDiasChecks('mv-dia').join('/'), _alunos: (t.alunosNomes || []).length });
+  }
+  function validarMover() {
+    if (!$('#mv-validacao') || !V.mover) return;
+    DIAS_TURMA.forEach(function (d) { const c = $('#mv-dia-' + d); if (c) c.parentNode.className = c.checked ? 'on' : ''; });
+    const r = rascunhoMover();
+    const ex = { erros: r.dia ? [] : ['Marque pelo menos um dia da semana.'], avisos: [], conflitos: r.dia ? L.conflitosTurma(r, S.turmas) : [] };
+    const sala = salaPorNome(r.sala);
+    if (sala && sala.capacidade && r._alunos > Number(sala.capacidade)) ex.avisos.push('A turma tem ' + r._alunos + ' alunos e a ' + sala.nome + ' comporta ' + sala.capacidade + '.');
+    $('#mv-validacao').innerHTML = htmlValidacaoTurma(r, ex, 'mv-usar-sala');
+    $('#mv-salvar').disabled = ex.erros.length > 0 || ex.conflitos.length > 0;
+  }
+  /* Arrastar e soltar (HTML5) no calendário de salas */
+  let arrastandoTurma = null;
+  document.addEventListener('dragstart', function (e) {
+    const b = e.target.closest && e.target.closest('.sc-bloco');
+    if (!b) return;
+    arrastandoTurma = b.dataset.turma;
+    try { e.dataTransfer.setData('text/plain', arrastandoTurma); e.dataTransfer.effectAllowed = 'move'; } catch (er) { /* ignora */ }
+    setTimeout(function () { b.classList.add('arrastando'); }, 0);
+  });
+  document.addEventListener('dragend', function () {
+    $$('.sc-bloco.arrastando').forEach(function (x) { x.classList.remove('arrastando'); });
+    $$('.sc-cel.alvo').forEach(function (x) { x.classList.remove('alvo'); });
+  });
+  document.addEventListener('dragover', function (e) {
+    const alvo = e.target.closest && e.target.closest('.sc-cel, .sc-bloco');
+    if (!alvo || !arrastandoTurma) return;
+    e.preventDefault();
+    if (alvo.classList.contains('sc-cel')) { $$('.sc-cel.alvo').forEach(function (x) { if (x !== alvo) x.classList.remove('alvo'); }); alvo.classList.add('alvo'); }
+  });
+  document.addEventListener('drop', function (e) {
+    const alvo = e.target.closest && e.target.closest('.sc-cel, .sc-bloco');
+    if (!alvo || !arrastandoTurma) return;
+    e.preventDefault();
+    const id = arrastandoTurma; arrastandoTurma = null;
+    $$('.sc-cel.alvo').forEach(function (x) { x.classList.remove('alvo'); });
+    dlgMoverTurma(id, alvo.dataset.sala);
+  });
 
   /* ---------- Matrículas ---------- */
   function checklistCompleta(m) {
@@ -10772,9 +11182,14 @@ window.FIREBASE_CONFIG = {
         const totalMes = totalHorasNoMes(p.nome, mesAtual);
         const lancamentoMesAtual = horas.find(function (h) { return mesDeData(h.semana) === mesAtual; });
         return '<div class="card-turma">' +
-          '<div class="ct-topo"><b>' + esc(p.nome) + '</b></div>' +
+          '<div class="ct-topo"><b>' + esc(p.nome) + '</b>' + (p.status === 'Inativo' ? '<span class="tag tag-erro">Inativo</span>' : '') + '</div>' +
           '<div class="ct-linha">' + turmasDele.length + ' turma(s) no total</div>' +
           '<div class="campo"><label>Telefone (WhatsApp)</label><input type="text" data-act="tel-prof" data-i="' + i + '" value="' + esc(p.telefone || '') + '" placeholder="(21) 99999-9999"></div>' +
+          '<div class="campos-matricula">' +
+          '<div class="campo"><label>E-mail</label><input type="email" data-act="prof-campo" data-campo="email" data-i="' + i + '" value="' + esc(p.email || '') + '" placeholder="nome@email.com"></div>' +
+          '<div class="campo"><label>Especialidade</label><input type="text" data-act="prof-campo" data-campo="especialidade" data-i="' + i + '" value="' + esc(p.especialidade || '') + '" placeholder="Ex.: Kids, Teens, Conversação"></div>' +
+          '<div class="campo"><label>Status</label><select data-act="prof-campo" data-campo="status" data-i="' + i + '"><option' + (p.status !== 'Inativo' ? ' selected' : '') + '>Ativo</option><option' + (p.status === 'Inativo' ? ' selected' : '') + '>Inativo</option></select></div>' +
+          '</div>' +
           '<div class="campo"><label>Valor da hora-aula (R$)</label><input type="text" inputmode="decimal" data-act="valor-hora-professor" data-i="' + i + '" value="' + esc(p.valorHoraAula || '') + '" placeholder="Ex.: 35.00"></div>' +
           '<div class="ct-acoes">' +
           (p.telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(p.telefone, 'Olá, ' + p.nome.split(' ')[0] + '! Aqui é da Washington Ilha.') + '">Chamar no WhatsApp</a>') : '') +
@@ -11467,9 +11882,51 @@ window.FIREBASE_CONFIG = {
       '<button class="btn" type="button" data-act="fechar">Cancelar</button></div>' +
       '</div></article>');
   }
+  function csvComBOM(cab, linhas) {
+    const campo = function (v) { const x = String(v == null ? '' : v); return /[";\n\r]/.test(x) ? '"' + x.replace(/"/g, '""') + '"' : x; };
+    return '\ufeff' + [cab].concat(linhas).map(function (l) { return l.map(campo).join(';'); }).join('\r\n');
+  }
+  function exportarCSVSalas(tipo) {
+    const sem = L.semestreDeData(HOJE), hoje = HOJE;
+    let nome = '', cab = [], linhas = [];
+    if (tipo === 'turmas') {
+      nome = 'turmas_' + sem + '_' + hoje + '.csv';
+      cab = ['Turma', 'Semestre', 'Dias', 'Horário', 'Professor', 'Sala', 'Alunos', 'Situação', 'Observação'];
+      linhas = S.turmas.filter(function (t) { return t.semestre === sem; }).map(function (t) { return [t.turma, t.semestre, t.dia, t.horario, t.professor, t.sala, (t.alunosNomes || []).length, t.situacao, t.obs || '']; });
+    } else if (tipo === 'professores') {
+      nome = 'professores_' + hoje + '.csv';
+      cab = ['Nome', 'E-mail', 'Telefone', 'Especialidade', 'Status', 'Turmas ' + sem];
+      linhas = S.professores.map(function (p) { return [p.nome, p.email || '', p.telefone || '', p.especialidade || '', p.status || 'Ativo', turmasQueOcupam(sem).filter(function (t) { return L.norm(t.professor) === L.norm(p.nome); }).length]; });
+    } else if (tipo === 'salas') {
+      nome = 'salas_' + hoje + '.csv';
+      cab = ['Sala', 'Capacidade', 'Status', 'Observações'];
+      linhas = S.salas.map(function (x) { return [x.nome, x.capacidade, x.status, x.obs || '']; });
+    } else {
+      nome = 'ocupacao_salas_' + sem + '_' + hoje + '.csv';
+      cab = ['Sala', 'Status', 'Capacidade', 'Turmas', 'Horas por semana', 'Ocupação (% de ' + JANELA_SALA_H + 'h)', 'Total de alunos', 'Maior turma', 'Turmas acima da capacidade'];
+      linhas = S.salas.map(function (x) {
+        const ts = turmasQueOcupam(sem).filter(function (t) { return L.norm(t.sala) === L.norm(x.nome); });
+        const mins = ts.reduce(function (s2, t) { return s2 + minutosSemana(t); }, 0);
+        const al = ts.map(function (t) { return (t.alunosNomes || []).length; });
+        const acima = x.capacidade ? ts.filter(function (t) { return (t.alunosNomes || []).length > Number(x.capacidade); }).map(function (t) { return t.turma; }).join(', ') : '';
+        return [x.nome, x.status, x.capacidade, ts.length, (mins / 60).toFixed(2).replace('.', ','), (mins / 60 / JANELA_SALA_H * 100).toFixed(1).replace('.', ','), al.reduce(function (a, b) { return a + b; }, 0), al.length ? Math.max.apply(null, al) : 0, acima];
+      });
+    }
+    baixar(nome, csvComBOM(cab, linhas), 'text/csv;charset=utf-8');
+    registrar('Exportou CSV', nome);
+    toast('Arquivo gerado: ' + nome);
+  }
   function viewDados() {
     const asaas = S.asaasImportado;
     return '<div class="topo"><h1>Dados</h1></div>' +
+      '<section class="bloco"><h2>Exportar planilhas (CSV para Excel)</h2>' +
+      '<p class="muted">Abrem direto no Excel, com acentos certos. Turmas e ocupação usam o semestre atual (' + esc(L.semestreDeData(HOJE)) + ').</p>' +
+      '<div class="ct-acoes">' +
+      '<button class="btn sm" type="button" data-act="exportar-csv-salas" data-tipo="turmas">Turmas</button>' +
+      '<button class="btn sm" type="button" data-act="exportar-csv-salas" data-tipo="professores">Professores</button>' +
+      '<button class="btn sm" type="button" data-act="exportar-csv-salas" data-tipo="salas">Salas</button>' +
+      '<button class="btn sm" type="button" data-act="exportar-csv-salas" data-tipo="ocupacao">Relatório de ocupação</button>' +
+      '</div></section>' +
       '<section class="bloco">' +
       '<h2>Asaas</h2>' +
       '<p class="muted">Atrasos, boletos e detalhes financeiros ficam no próprio Asaas — aqui é só o resumo por aluno.</p>' +
@@ -11509,13 +11966,9 @@ window.FIREBASE_CONFIG = {
     'nova-turma': function () { dlgEditarTurma(null); },
     'editar-turma': function (el) { dlgEditarTurma(el.dataset.id); },
     'salvar-turma': function (el) {
-      const nome = $('#et-turma').value.trim();
-      const semestre = $('#et-semestre').value.trim();
-      if (!nome || !semestre) { toast('Preencha pelo menos o nome da turma e o semestre.'); return; }
-      const dados = {
-        turma: nome, semestre: semestre, dia: $('#et-dia').value.trim(), horario: $('#et-horario').value.trim(),
-        professor: $('#et-professor').value.trim(), sala: $('#et-sala').value.trim(), situacao: $('#et-situacao').value, obs: $('#et-obs').value.trim(),
-      };
+      const r = rascunhoDlgTurma(), ex = examinarRascunhoTurma(r); /* confere de novo na hora de salvar */
+      if (ex.erros.length || ex.conflitos.length) { validarDlgTurma(); toast(ex.conflitos.length ? 'Ainda há choque de horário. Troque a sala, o professor, os dias ou o horário.' : ex.erros[0]); return; }
+      const dados = { turma: r.turma, semestre: r.semestre, dia: r.dia, horario: r.horario, professor: r.professor, sala: r.sala, situacao: r.situacao, obs: r.obs };
       let t = el.dataset.id ? D.turmaPorId[el.dataset.id] : null;
       if (t) {
         Object.assign(t, dados);
@@ -11528,8 +11981,78 @@ window.FIREBASE_CONFIG = {
       LS.set('turmas', S.turmas);
       fecharDlg();
       recalc(); render();
-      toast(el.dataset.id ? 'Turma atualizada.' : 'Turma criada.');
+      toast(el.dataset.id ? 'Turma atualizada e salva.' : 'Turma criada e salva.');
     },
+    'et-validar': function () { validarDlgTurma(); },
+    'et-usar-sala': function (el) { $('#et-sala').value = el.dataset.sala; validarDlgTurma(); },
+    'mv-validar': function () { validarMover(); },
+    'mv-usar-sala': function (el) { $('#mv-sala').value = el.dataset.sala; validarMover(); },
+    'mv-confirmar': function () {
+      if (!V.mover) return;
+      const r = rascunhoMover();
+      if (!r.dia || L.conflitosTurma(r, S.turmas).length) { validarMover(); toast('Ainda há choque de horário.'); return; }
+      const t = D.turmaPorId[V.mover.id];
+      const antes = (t.sala || 'sem sala') + ' ' + t.dia;
+      t.sala = r.sala; t.dia = r.dia;
+      LS.set('turmas', S.turmas);
+      registrar('Moveu turma no calendário de salas', t.turma + ': ' + antes + ' → ' + t.sala + ' ' + t.dia);
+      V.mover = null;
+      fecharDlg(); recalc(); render();
+      toast('Turma movida e salva.');
+    },
+    'salas-modo': function (el) { V.salasModo = el.dataset.m; V.view = 'salas'; render(); },
+    'salas-dia': function (el) { V.salasDia = el.dataset.d; render(); },
+    'salas-semana': function (el) {
+      const d = Number(el.dataset.d);
+      if (d === 0) { V.salasSemana = null; V.salasDia = ''; } else V.salasSemana = Math.max(0, Math.min(salasTotalSemanas() - 1, salasSemanaAtual() + d));
+      render();
+    },
+    'sc-abrir': function (el) { dlgTurma(el.dataset.turma); },
+    'ns-campo': function (el) { V.novaSala[el.dataset.campo] = el.value; },
+    'add-sala': function () {
+      const ns = V.novaSala, nome = (ns.nome || '').trim();
+      if (!nome) { toast('Informe o nome da sala.'); return; }
+      if (salaPorNome(nome)) { toast('Já existe uma sala com esse nome.'); return; }
+      const usadas = S.salas.map(function (x) { return x.cor; });
+      const cor = CORES_SALA.filter(function (c) { return usadas.indexOf(c) < 0; })[0] || CORES_SALA[S.salas.length % CORES_SALA.length];
+      S.salas.push({ id: 'sala' + Date.now().toString(36), nome: nome, capacidade: String(parseInt(ns.capacidade, 10) || ''), obs: (ns.obs || '').trim(), status: ns.status || 'Ativa', cor: cor });
+      salvarSalas();
+      registrar('Cadastrou sala', nome);
+      V.novaSala = { nome: '', capacidade: '12', obs: '', status: 'Ativa' };
+      render(); toast('Sala cadastrada e salva.');
+    },
+    'editar-sala': function (el) { dlgSala(el.dataset.id); },
+    'salvar-sala': function (el) {
+      const x = S.salas.find(function (y) { return y.id === el.dataset.id; });
+      if (!x) return;
+      const nome = $('#es-nome').value.trim();
+      if (!nome) { toast('Informe o nome da sala.'); return; }
+      const outra = salaPorNome(nome);
+      if (outra && outra !== x) { toast('Já existe uma sala com esse nome.'); return; }
+      if (L.norm(nome) !== L.norm(x.nome)) {
+        S.turmas.forEach(function (t) { if (L.norm(t.sala) === L.norm(x.nome)) t.sala = nome; });
+        LS.set('turmas', S.turmas);
+      }
+      x.nome = nome; x.capacidade = String(parseInt($('#es-cap').value, 10) || ''); x.status = $('#es-status').value; x.obs = $('#es-obs').value.trim();
+      salvarSalas(); registrar('Editou sala', nome);
+      fecharDlg(); recalc(); render(); toast('Sala salva.');
+    },
+    'excluir-sala': function (el) { dlgExcluirSala(el.dataset.id); },
+    'confirmar-excluir-sala': function (el) {
+      const x = S.salas.find(function (y) { return y.id === el.dataset.id; });
+      if (!x) return;
+      S.salas = S.salas.filter(function (y) { return y !== x; });
+      salvarSalas(); registrar('Excluiu sala', x.nome);
+      fecharDlg(); render(); toast('Sala excluída.');
+    },
+    'prof-campo': function (el) {
+      const p = S.professores[Number(el.dataset.i)];
+      if (!p) return;
+      p[el.dataset.campo] = el.value;
+      LS.set('professores', S.professores);
+      if (el.tagName === 'SELECT') { registrar('Editou professor', p.nome + ': ' + el.dataset.campo + ' = ' + el.value); render(); }
+    },
+    'exportar-csv-salas': function (el) { exportarCSVSalas(el.dataset.tipo); },
     'excluir-turma': function (el) {
       const t = D.turmaPorId[el.dataset.id];
       if (!t) return;
@@ -11909,7 +12432,7 @@ window.FIREBASE_CONFIG = {
     'cancelamento-data': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cancelamento.data = el.value; LS.set('alunos', S.alunos); } },
     'cancelamento-motivo': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) { a.cancelamento.motivo = el.value; LS.set('alunos', S.alunos); registrar('Definiu motivo de cancelamento', a.nome + ' → ' + el.value); } },
     'baixar-data': function () {
-      const payload = { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, despesasUnifecaf: S.despesasUnifecaf, pendencias: S.pendencias, comunicados: S.comunicados, modelosComunicado: S.modelosComunicado, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
+      const payload = { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, despesasUnifecaf: S.despesasUnifecaf, pendencias: S.pendencias, comunicados: S.comunicados, modelosComunicado: S.modelosComunicado, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula, salas: S.salas };
       baixar('data.js', 'window.WASH_DATA = ' + JSON.stringify(payload, null, 1) + ';\n', 'text/javascript;charset=utf-8');
       toast('data.js baixado');
     },
@@ -12760,12 +13283,13 @@ window.FIREBASE_CONFIG = {
   /* ---------- Sincronização entre navegadores ---------- */
   function aplicarRemoto(dados) {
     let mudou = false;
-    ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'despesasUnifecaf', 'pendencias', 'comunicados', 'modelosComunicado', 'ocorrenciasProfessor', 'horasAula'].forEach(function (k) {
+    ['professores', 'turmas', 'alunos', 'matriculas', 'compromissos', 'frequencias', 'cfg', 'log', 'asaasImportado', 'materiais', 'entradas', 'despesas', 'despesasUnifecaf', 'pendencias', 'comunicados', 'modelosComunicado', 'ocorrenciasProfessor', 'horasAula', 'salas'].forEach(function (k) {
       if (dados[k] !== undefined) {
         if (k === 'compromissos') notificarCompromissosNovos(dados.compromissos);
         S[k] = dados[k];
         if (k === 'alunos') normalizarAlunos(S.alunos);
-        if (k === 'professores') normalizarValorHoraAulaProfessores();
+        if (k === 'professores') { normalizarValorHoraAulaProfessores(); normalizarCamposProfessores(); }
+        if (k === 'salas') { if (!Array.isArray(S.salas)) S.salas = null; garantirSalas(); }
         LS.setLocal(k, S[k]);
         mudou = true;
       }
@@ -12775,7 +13299,7 @@ window.FIREBASE_CONFIG = {
   recalc();
 
   function estadoAtualParaSemear() {
-    return { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, cfg: S.cfg, log: S.log, asaasImportado: S.asaasImportado, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, despesasUnifecaf: S.despesasUnifecaf, pendencias: S.pendencias, comunicados: S.comunicados, modelosComunicado: S.modelosComunicado, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula };
+    return { professores: S.professores, turmas: S.turmas, alunos: S.alunos, matriculas: S.matriculas, compromissos: S.compromissos, frequencias: S.frequencias, cfg: S.cfg, log: S.log, asaasImportado: S.asaasImportado, materiais: S.materiais, entradas: S.entradas, despesas: S.despesas, despesasUnifecaf: S.despesasUnifecaf, pendencias: S.pendencias, comunicados: S.comunicados, modelosComunicado: S.modelosComunicado, ocorrenciasProfessor: S.ocorrenciasProfessor, horasAula: S.horasAula, salas: D.salasDerivadas ? undefined : S.salas };
   }
 
   let syncIniciado = false;
