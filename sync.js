@@ -103,6 +103,21 @@
     return garantirFirebase().then(function () { return firebase.auth().signOut(); });
   }
 
+  /** Manda o e-mail do Firebase para a pessoa criar uma senha nova (serve para "esqueci a senha"). */
+  function resetSenha(email) {
+    if (!CONFIG) return Promise.reject(new Error('sem-firebase'));
+    return garantirFirebase().then(function () { return firebase.auth().sendPasswordResetEmail(email); });
+  }
+  /** Cria o login de outra pessoa sem derrubar quem está logada: usa uma segunda instância do
+      Firebase só para o cadastro e sai dela em seguida. */
+  function criarAcesso(email, senha) {
+    if (!CONFIG) return Promise.reject(new Error('sem-firebase'));
+    return garantirFirebase().then(function () {
+      let app2;
+      try { app2 = firebase.app('cadastro-equipe'); } catch (e) { app2 = firebase.initializeApp(CONFIG, 'cadastro-equipe'); }
+      return app2.auth().createUserWithEmailAndPassword(email, senha).then(function () { return app2.auth().signOut(); });
+    });
+  }
   /** Traduz os erros mais comuns do Firebase Auth para uma frase que a equipe entenda. */
   function mensagemErroLogin(err) {
     const codigo = err && err.code;
@@ -115,6 +130,8 @@
       'auth/too-many-requests': 'Muitas tentativas erradas. Aguarde um pouco e tente de novo.',
       'auth/user-disabled': 'Este acesso foi desativado. Fale com a coordenação.',
       'auth/network-request-failed': 'Sem conexão com a internet agora.',
+      'auth/email-already-in-use': 'Esse e-mail já tem login. Use "Enviar e-mail para criar nova senha".',
+      'auth/weak-password': 'A senha precisa de pelo menos 6 caracteres.',
       'auth/operation-not-allowed': 'O login por e-mail/senha ainda não foi ativado no Firebase (veja o README).',
     };
     return MAPA[codigo] || 'Não foi possível entrar. Confira o e-mail e a senha.';
@@ -188,5 +205,6 @@
     pontoPublicarConfig: pontoPublicarConfig, pontoLerPins: pontoLerPins, pontoSalvarPin: pontoSalvarPin,
     configured: configured, init: init, push: push,
     watchAuth: watchAuth, signIn: signIn, signOut: signOut, mensagemErroLogin: mensagemErroLogin,
+    resetSenha: resetSenha, criarAcesso: criarAcesso,
   };
 });

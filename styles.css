@@ -73,10 +73,10 @@ main { padding: 1.6rem clamp(1rem, 3vw, 2.4rem) 3rem; min-width: 0; max-width: 8
 .btn.sm { padding: 0.3rem 0.6rem; font-size: 0.8125rem; }
 .link { background: none; border: 0; padding: 0; color: var(--brand-strong); text-decoration: underline; font-weight: 600; }
 label { display: block; font-weight: 600; font-size: 0.8125rem; margin-bottom: 0.25rem; }
-input[type='text'], input[type='search'], input[type='file'], input[type='date'], select, textarea {
+input[type='text'], input[type='email'], input[type='number'], input[type='search'], input[type='file'], input[type='date'], select, textarea {
   font: inherit; padding: 0.45rem 0.6rem; border: 1px solid #b9c5cf; border-radius: 8px; background: #fff; color: var(--ink);
 }
-input[type='text'], input[type='search'], textarea { width: 100%; }
+input[type='text'], input[type='email'], input[type='search'], textarea { width: 100%; }
 textarea { resize: vertical; font-family: inherit; }
 .campo { margin-bottom: 0.7rem; max-width: 22rem; }
 .campos-matricula { display: grid; grid-template-columns: repeat(auto-fit, minmax(13rem, 1fr)); gap: 0.8rem; margin-bottom: 0.8rem; }
@@ -313,3 +313,92 @@ body.tela-login .rail { display: none; }
 .barra i { display: block; height: 100%; border-radius: 99px; }
 .barra-v { text-align: right; color: var(--ink-3); font-variant-numeric: tabular-nums; font-size: 0.8rem; }
 .acoes-icone { white-space: nowrap; text-align: right; }
+/* Menu em grupos (Financeiro, Pedagógico, Secretaria) */
+.nav-grupo { font-size: 0.68rem; font-weight: 700; letter-spacing: 0.09em; text-transform: uppercase; opacity: 0.6; padding: 0.9rem 0.6rem 0.25rem; }
+.nav-sep { height: 0.5rem; }
+@media (max-width: 820px) { .nav-grupo { padding: 0 0.3rem 0 0.6rem; white-space: nowrap; align-self: center; border-left: 1px solid rgba(255,255,255,.25); } .nav-sep { display: none; } }
+/* Abas internas das abas que juntaram outras */
+.sub-abas { display: flex; gap: 0.25rem; border-bottom: 2px solid var(--line); margin: 0 0 1rem; overflow-x: auto; }
+.sub-aba { border: 0; background: none; padding: 0.55rem 0.9rem; font-weight: 600; color: var(--ink-2); border-bottom: 3px solid transparent; margin-bottom: -2px; cursor: pointer; white-space: nowrap; }
+.sub-aba:hover { color: var(--ink); }
+.sub-aba.on { color: var(--brand-strong); border-bottom-color: var(--brand); }
+.sub-aba-n { display: inline-block; min-width: 1.3rem; padding: 0 0.35rem; border-radius: 99px; background: var(--neutro-soft); font-size: 0.75rem; text-align: center; }
+.sub-abas.mini { margin: 0.6rem 0 0.4rem; }
+.sub-abas.mini .sub-aba { padding: 0.35rem 0.6rem; font-size: 0.85rem; }
+/* Semana: botões de adicionar e eventos */
+.semana-add { display: flex; gap: 0.4rem; flex-wrap: wrap; margin: 0 0 0.8rem; }
+.grade-item.evento { background: #fff4e0; border-left-color: #d9480f; }
+.grade-item.evento.aula-extra { background: #e8f6ef; border-left-color: var(--ok); }
+.mes-item.mes-item-evento { border-left-color: #d9480f; background: #fff4e0; }
+.mes-item.mes-item-evento.aula-extra { border-left-color: var(--ok); background: #e8f6ef; }
+.card-evento { border-left: 4px solid #d9480f; }
+.card-evento.aula-extra { border-left-color: var(--ok); }
+.checklist { display: grid; gap: 0.25rem; margin: 0.4rem 0; }
+.check-item { display: flex; gap: 0.45rem; align-items: center; font-size: 0.9rem; cursor: pointer; }
+.check-item.feito { color: var(--ink-3); text-decoration: line-through; }
+.check-linha { display: flex; justify-content: space-between; gap: 0.5rem; align-items: center; }
+.pre { white-space: pre-wrap; }
+.mini { font-size: 0.78rem; }
+/* Turmas: busca e cabeçalho da turma na chamada */
+.busca-lupa { min-width: 16rem; }
+.turma-cabecalho { background: var(--card); border: 1px solid var(--line); border-left: 5px solid var(--pc, var(--brand)); border-radius: var(--radius); padding: 0.8rem 1rem; margin: 0.8rem 0; display: grid; gap: 0.5rem; }
+.tc-titulo b { font-family: var(--font-display); font-size: 1.15rem; margin-right: 0.3rem; }
+.tc-dados { display: flex; flex-wrap: wrap; gap: 0.4rem 1.6rem; }
+.tc-dados span { display: flex; flex-direction: column; font-weight: 600; }
+.tc-dados small { font-weight: 400; color: var(--ink-3); font-size: 0.75rem; }
+/* Alunos: rematrícula com contagem e ficha em seções */
+.remat { display: flex; flex-direction: column; gap: 0.25rem; align-items: flex-start; }
+.remat-timer { font-size: 0.8rem; font-variant-numeric: tabular-nums; color: var(--ink-2); white-space: nowrap; }
+.remat-timer.perto { color: var(--warn); font-weight: 700; }
+.remat-timer.venc { color: var(--erro); font-weight: 700; }
+.remat .btn[disabled] { opacity: 0.45; cursor: not-allowed; }
+.sec-aluno { border: 1px solid var(--line); border-radius: var(--radius); margin: 0.5rem 0; background: var(--card); }
+.sec-aluno > summary { cursor: pointer; padding: 0.65rem 0.9rem; display: flex; align-items: center; gap: 0.6rem; list-style: none; font-weight: 700; }
+.sec-aluno > summary::-webkit-details-marker { display: none; }
+.sec-aluno > summary::before { content: '▸'; color: var(--ink-3); transition: transform .15s; }
+.sec-aluno[open] > summary::before { transform: rotate(90deg); }
+.sec-aluno .sec-r { margin-left: auto; font-weight: 400; font-size: 0.85rem; color: var(--ink-2); }
+.sec-corpo { padding: 0 0.9rem 0.9rem; }
+.lista-oc { list-style: none; margin: 0.4rem 0; padding: 0; display: grid; gap: 0.4rem; }
+.lista-oc li { display: flex; justify-content: space-between; gap: 0.6rem; align-items: flex-start; border-bottom: 1px solid var(--line-2); padding-bottom: 0.4rem; }
+/* Inadimplência: acordos e histórico */
+.acordo { border-top: 1px dashed var(--line); margin-top: 0.6rem; padding-top: 0.6rem; display: grid; gap: 0.4rem; }
+.parcelas { display: flex; flex-wrap: wrap; gap: 0.35rem; }
+.parcela { display: inline-flex; align-items: center; gap: 0.35rem; border: 1px solid var(--line); border-radius: 8px; padding: 0.3rem 0.55rem; font-size: 0.85rem; cursor: pointer; font-variant-numeric: tabular-nums; }
+.parcela.paga { background: var(--ok-soft); border-color: var(--ok); }
+.parcela.vencida { background: var(--erro-soft); border-color: var(--erro); }
+.hist-cobranca { margin-top: 0.5rem; }
+.hist-cobranca > summary { cursor: pointer; font-weight: 600; color: var(--brand-strong); }
+
+/* ---------- Para fazer hoje ---------- */
+.hoje h2 { margin-bottom: .5rem; }
+.lista-hoje { list-style: none; margin: 0; padding: 0; }
+.lista-hoje li { display: flex; align-items: center; gap: .6rem; padding: .45rem 0; border-bottom: 1px solid var(--line-2); flex-wrap: wrap; }
+.lista-hoje li:last-child { border-bottom: 0; }
+.hoje-tipo { font-size: .72rem; text-transform: uppercase; letter-spacing: .04em; color: var(--ink-3); min-width: 6.5rem; }
+.hoje-txt { text-align: left; flex: 1; min-width: 12rem; }
+
+/* ---------- Inadimplência compacta ---------- */
+.card-inad > summary { list-style: none; cursor: pointer; }
+.card-inad > summary::-webkit-details-marker { display: none; }
+.card-inad > summary .ct-topo::after { content: '▸'; margin-left: auto; color: var(--ink-3); }
+.card-inad[open] > summary .ct-topo::after { content: '▾'; }
+.card-inad[open] > summary { margin-bottom: .6rem; padding-bottom: .5rem; border-bottom: 1px dashed var(--line-2); }
+.inad-resumo { font-size: .85rem; }
+
+/* ---------- Organizar cadastros ---------- */
+.tabela-rolagem { overflow-x: auto; }
+.tabela-completar input { min-width: 7.5rem; width: 100%; }
+.tabela-completar input.falta { border-color: var(--warn); background: var(--warn-soft); }
+.mini { font-size: .78rem; }
+
+/* ---------- Equipe ---------- */
+.areas-check { display: flex; flex-wrap: wrap; gap: .25rem .7rem; font-size: .82rem; }
+.areas-check label { display: inline-flex; align-items: center; gap: .25rem; color: var(--ink-3); }
+.areas-check label.on { color: inherit; }
+.acoes-equipe { display: flex; flex-direction: column; gap: .3rem; align-items: flex-start; }
+.senha-box { font-family: var(--font-mono); background: var(--brand-soft); padding: .6rem .8rem; border-radius: 8px; }
+.login-ok { color: var(--ok); font-size: .9rem; }
+.login-esqueci { margin: .4rem 0 0; }
+.link-claro { color: inherit; opacity: .85; text-decoration: underline; }
+.input-nome-equipe { font-weight: 600; max-width: 14rem; }

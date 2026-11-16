@@ -316,3 +316,45 @@ No cadastro/edição de turma, os dias são caixinhas, o horário é início e f
 ## Exportar CSV
 
 Em **Dados › Exportar planilhas**: turmas (semestre atual), professores, salas e relatório de ocupação, em CSV que abre direto no Excel.
+
+## Reorganização de novembro/2026
+
+- **Menu em grupos**: Visão geral, Semana e Pendências no topo; **Financeiro** (Inadimplência, Entradas, Despesas, Despesas UniFECAF, Ponto); **Pedagógico** (Turmas, Professores); **Secretaria** (Alunos, Comunicados); Dados no fim. Conferência e Buscar saíram.
+- **Semana** virou o calendário único: Mês, Semana inteira, Só um dia, **Por sala** (calendário por sala, ocupação e cadastro de salas) e **Eventos e compromissos**. Botões **+ Evento ou ação**, **+ Aula extra** e **+ Compromisso**. Eventos têm data, horário, local, responsável, situação, **checklist de preparação** e observações, e aparecem na semana, no mês e no dia.
+- **Turmas** tem busca por nome (turma, professor ou aluno) e a aba **Chamada e frequência**, com o cabeçalho da turma (professor, dias, sala, vagas) em cima e os alunos para marcar presença embaixo. Botão **Chamada** em cada turma.
+- **Alunos** tem as abas Alunos, Matrículas e Material. A lista mostra só a turma atual, a **contagem até a rematrícula** (contrato de 180 dias a partir da data em que o aluno começou, ou o fim do contrato da matrícula) com o botão Rematrícula liberado 30 dias antes, e se o material foi comprado. A ficha do aluno abre em seções (Cadastro, Turma e frequência, Material, Pagamento, Matrícula e rematrícula, Mensagens, **Ocorrências** ativas/resolvidas, Cancelamento).
+- **Professores** tem as abas Professores e Ocorrências.
+- **Inadimplência** ganhou **acordos de pagamento** (valor, parcelas com vencimento, forma, observação; marcar cada parcela paga; quando todas são pagas o aluno passa para em dia) e o **histórico do que foi feito** com cada aluno (contatos, mensagens, pagamentos, quem fez e quando). Filtros: sem acordo, com acordo, acordos quebrados.
+- **Visão geral** mostra os números da semana, do mês ou do ano.
+
+## Equipe e acessos (cada pessoa com o próprio login)
+
+- **Equipe e acessos** (menu de baixo, só para Administração): cadastre cada pessoa com nome, e-mail e função. **Cadastrar e criar login** cria o acesso no Firebase com uma senha provisória e mostra a mensagem pronta para mandar à pessoa. Se ela já tinha login e esqueceu a senha, use **Enviar e-mail para criar nova senha**.
+- A tela de entrar tem **Esqueci minha senha**: a pessoa digita o e-mail e recebe o link para criar uma senha nova.
+- O nome de quem fez cada alteração agora vem do login. Se alguém entrar com o login de outra pessoa, as alterações vão aparecer no nome dessa outra pessoa.
+- Funções (as áreas podem ser ajustadas por pessoa marcando ou desmarcando as caixas):
+
+| Função | Vê |
+|---|---|
+| Administração | tudo, incluindo Equipe e acessos |
+| Sócia / Coordenação | tudo, menos Equipe e acessos |
+| Secretaria / atendimento | Financeiro e Secretaria |
+| Organização de cadastros | Financeiro, Secretaria e Organizar cadastros |
+| Pedagógico | Financeiro e Pedagógico |
+
+  Visão geral, Semana e Pendências aparecem para todas as funções.
+- Enquanto ninguém estiver cadastrado em Equipe, todo mundo vê tudo, como antes. Quando a primeira pessoa é cadastrada, quem está logada entra automaticamente como Administração. Um e-mail com login no Firebase que não está na equipe (ou foi desativado) vê só uma tela pedindo para falar com a Isa.
+- Importante: isso controla **o que aparece na tela**, não o banco de dados. Qualquer login válido no Firebase ainda consegue ler e gravar o banco. Para tirar alguém de vez, desative a pessoa aqui **e também** no Firebase (Authentication › Users › Disable account).
+
+## Organizar cadastros
+
+Fica em Secretaria. Tem três abas:
+- **Duplicados**: o botão **Mesclar os casos óbvios** junta de uma vez os cadastros com o mesmo telefone e o mesmo primeiro nome, mantendo o cadastro de nome mais completo. Turmas, matrículas, presenças, pagamentos, acordos, ocorrências e os dados que faltavam passam para ele. Os outros casos (irmãos com o mesmo telefone, por exemplo) são decididos um a um.
+- **Completar cadastros**: tabela para digitar direto o telefone, a data de início, o nascimento, o CPF e o dia de vencimento. O cadastro é considerado completo com telefone, data de início e nascimento.
+- **Turmas sem sala**: escolhe a sala de cada turma do semestre. Salas ocupadas no mesmo horário ficam bloqueadas.
+
+## Para fazer hoje
+
+No topo da Visão geral, uma lista do que pede ação no dia, de acordo com o que a pessoa pode ver: parcelas de acordo vencidas ou que vencem hoje, atrasados sem nenhum contato, despesas vencidas, rematrículas dos próximos 7 dias, aniversariantes, compromissos do dia, eventos da semana com checklist incompleto, pendências do dia ou atrasadas e, no fim, as aulas do dia, com um atalho para a chamada.
+
+Na **Inadimplência**, cada aluno aparece numa linha de resumo (valor, dias de atraso, acordo e última cobrança). Clique na linha para abrir o card completo.
