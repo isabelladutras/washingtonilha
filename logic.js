@@ -531,6 +531,11 @@
    * Devolve um objeto por profId: { profId, profNome, aulas: [...], pendentes: [...], totalMin }.
    * Cada aula: { data, entrada, saida, turma, turmaId, min }. Cada pendente: { motivo, reg }.
    */
+  /* Batida repetida: o professor tocou 2x no mesmo botão (ou a coordenação completou um horário
+     que já existia). Mesma pessoa, mesmo tipo, mesmo dia, com até 20 min de diferença e sem nenhuma
+     batida do outro tipo entre as duas. A repetida é ignorada na conta (fica a primeira entrada e
+     a primeira saída) e aparece numa lista à parte, com botão pra apagar. */
+  const PONTO_REPETIDA_MIN = 20;
   function parearPonto(registros, hojeISO) {
     const porProf = {};
     (registros || []).slice().sort(function (a, b) { return a.em - b.em; }).forEach(function (r) {
@@ -542,24 +547,30 @@
     const out = {};
     Object.keys(porProf).forEach(function (pid) {
       const g = porProf[pid];
-      const aulas = [], pendentes = [], emAula = [];
-      let aberta = null;
+      const aulas = [], pendentes = [], emAula = [], repetidas = [];
+      let aberta = null, ultimaSaida = null;
       function fecharPendente(motivo) { if (aberta) { pendentes.push({ motivo: motivo, reg: aberta }); aberta = null; } }
+      function perto(a, b) { return a && dataLocal(a.em) === dataLocal(b.em) && (b.em - a.em) <= PONTO_REPETIDA_MIN * 60000; }
       g.regs.forEach(function (r) {
         if (r.tipo === 'entrada') {
+          if (aberta && perto(aberta, r)) { repetidas.push({ reg: r, original: aberta }); return; }
           fecharPendente('sem saída');
-          aberta = r;
+          aberta = r; ultimaSaida = null;
         } else if (r.tipo === 'saida') {
           if (aberta && dataLocal(aberta.em) === dataLocal(r.em)) {
-            aulas.push({
+            const aula = {
               data: dataLocal(aberta.em), entrada: aberta, saida: r,
               turma: aberta.turma || r.turma || '', turmaId: aberta.turmaId || r.turmaId || '',
               min: Math.round((r.em - aberta.em) / 60000),
-            });
-            aberta = null;
+            };
+            aulas.push(aula);
+            aberta = null; ultimaSaida = r;
+          } else if (!aberta && perto(ultimaSaida, r)) {
+            repetidas.push({ reg: r, original: ultimaSaida });
           } else {
             fecharPendente('sem saída');
             pendentes.push({ motivo: 'sem entrada', reg: r });
+            ultimaSaida = null;
           }
         }
       });
@@ -568,11 +579,24 @@
         else fecharPendente('sem saída');
       }
       out[pid] = {
-        profId: pid, profNome: g.profNome, aulas: aulas, pendentes: pendentes, emAula: emAula,
+        profId: pid, profNome: g.profNome, aulas: aulas, pendentes: pendentes, emAula: emAula, repetidas: repetidas, regs: g.regs,
         totalMin: aulas.reduce(function (s, a) { return s + a.min; }, 0),
       };
     });
     return out;
+  }
+
+  /* Confere, antes de gravar, se uma batida nova (completar entrada/saída ou lançar aula à mão)
+     vai mesmo resolver a pendência, em vez de criar outra. Devolve '' se está tudo certo ou o
+     motivo do problema, em português, pra mostrar na tela. */
+  function conferirBatidaNova(registros, nova, alvoId) {
+    const antes = parearPonto(registros, null)[nova.profId] || { pendentes: [], repetidas: [] };
+    const depois = parearPonto((registros || []).concat([Object.assign({ id: '__nova__' }, nova)]), null)[nova.profId];
+    if (depois.repetidas.some(function (x) { return x.reg.id === '__nova__'; })) return 'Já existe uma ' + (nova.tipo === 'saida' ? 'saída' : 'entrada') + ' desse professor perto desse horário. Confira as batidas do dia antes de lançar outra.';
+    if (depois.pendentes.some(function (p) { return p.reg.id === '__nova__'; })) return 'Esse horário cai depois de outra batida do mesmo dia, então não fecha a aula. Confira as batidas do dia abaixo.';
+    if (alvoId && depois.pendentes.some(function (p) { return p.reg.id === alvoId; })) return 'Esse horário não fecha a pendência: tem outra batida no meio. Confira as batidas do dia abaixo.';
+    if (depois.pendentes.length > antes.pendentes.length) return 'Esse horário criaria uma nova pendência. Confira as batidas do dia abaixo.';
+    return '';
   }
 
   /**
@@ -803,7 +827,7 @@
   return {
     asaasLinhas: asaasLinhas, asaasCasarAluno: asaasCasarAluno, asaasPlano: asaasPlano,
     pontoSlug: pontoSlug, fmtHM: fmtHM, dataLocal: dataLocal, horaLocal: horaLocal,
-    periodoFechamento: periodoFechamento, parearPonto: parearPonto, compararComHorario: compararComHorario,
+    periodoFechamento: periodoFechamento, parearPonto: parearPonto, conferirBatidaNova: conferirBatidaNova, compararComHorario: compararComHorario,
     DIAS_ORDEM: DIAS_ORDEM, DIAS_FULL: DIAS_FULL,
     norm: norm, diasDaTurma: diasDaTurma, horarioMin: horarioMin, horariosSeSobrepoem: horariosSeSobrepoem,
     turmaOcupaHorario: turmaOcupaHorario, salaOnline: salaOnline, fmtHoraTurma: fmtHoraTurma, fmtHorarioTurma: fmtHorarioTurma, conflitosTurma: conflitosTurma,

@@ -402,3 +402,24 @@ body.tela-login .rail { display: none; }
 .login-esqueci { margin: .4rem 0 0; }
 .link-claro { color: inherit; opacity: .85; text-decoration: underline; }
 .input-nome-equipe { font-weight: 600; max-width: 14rem; }
+
+/* ---------- Ponto: repetidas e batidas do dia ---------- */
+.ponto-rep { margin: 0.4rem 0; font-size: 0.88rem; }
+.ponto-rep > summary { cursor: pointer; color: var(--ink-2); }
+.aluno-turma-linha.destaque { background: var(--warn-soft); border-radius: 6px; }
+
+/* ---------- Responsável (menor de idade) ---------- */
+.bloco-menor { border: 1px dashed var(--line); border-radius: var(--radius); padding: 0.5rem 0.8rem; margin: 0.6rem 0; }
+
+/* ---------- Rematrícula do próximo semestre ---------- */
+.tabela-cont input[type='text'] { min-width: 12rem; }
+.sel-cont { min-width: 10rem; }
+
+/* ---------- Pendências no calendário ---------- */
+.mes-dia.selecionado { box-shadow: inset 0 0 0 2px var(--ok); }
+.pend-item { border-left-color: var(--brand); background: var(--brand-soft); }
+.pend-item.atrasada { border-left-color: var(--erro); background: var(--erro-soft); }
+.pend-item.resolvida { border-left-color: var(--ok); background: var(--ok-soft); text-decoration: line-through; opacity: 0.7; }
+.pend-leg { display: inline-block; width: 0.7rem; height: 0.7rem; border-radius: 2px; background: var(--brand-soft); border-left: 3px solid var(--brand); vertical-align: middle; }
+.pend-leg.atrasada { background: var(--erro-soft); border-left-color: var(--erro); }
+.pend-leg.resolvida { background: var(--ok-soft); border-left-color: var(--ok); }

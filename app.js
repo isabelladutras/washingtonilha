@@ -210,6 +210,7 @@
       alunoId: '', alunoNome: '', turmaId: '', dataInicio: '', dataPagamento: '', formaPagamento: 'asaas',
       valorMensalidade: '', valorMaterial: '', livro: '', descontoTem: false, descontoValor: '', descontoObs: '',
       rg: '', cpf: '', dataNascimento: '', endereco: '', cep: '', diaVencimento: '',
+      menor: false, resp: {},
     },
     novoCompromisso: { titulo: '', alunoId: '', alunoNome: '', comQuem: 'Isa', data: '', horario: '', local: '', obs: '' },
     chamadaTurmaId: '', chamadaData: HOJE, chamadaPresencas: {}, fMesFrequencia: mesDeData(HOJE),
@@ -269,6 +270,7 @@
   }
 
   function recalc() {
+    normalizarAlunos(S.alunos); // aluno criado agora (matrícula, turma, Asaas) ganha as listas que a ficha usa
     D.turmaPorId = {}; S.turmas.forEach(function (t) { D.turmaPorId[t.id] = t; });
     D.alunoPorId = {}; S.alunos.forEach(function (a) { D.alunoPorId[a.id] = a; });
     D.matriculaPorId = {}; S.matriculas.forEach(function (m) { D.matriculaPorId[m.id] = m; });
@@ -954,7 +956,7 @@
       S.alunos.forEach(function (a) {
         if (alunoEstaCancelado(a)) return;
         const c = cicloRematricula(a);
-        if (c && c.dias != null && c.dias <= 7 && c.dias >= -30 && !rematriculaEnviadaNoCiclo(a, c)) add('Rematrícula', esc(a.nome) + ' · ' + (c.dias < 0 ? 'venceu há ' + Math.abs(c.dias) + 'd' : c.dias === 0 ? 'vence hoje' : 'faltam ' + c.dias + 'd'), 'ver-aluno" data-id="' + a.id);
+        if (c && c.dias != null && c.dias <= 7 && c.dias >= -30 && !rematriculaEnviadaNoCiclo(a, c) && !respostaContinuidade(a).resposta) add('Rematrícula', esc(a.nome) + ' · ' + (c.dias < 0 ? 'venceu há ' + Math.abs(c.dias) + 'd' : c.dias === 0 ? 'vence hoje' : 'faltam ' + c.dias + 'd'), 'ver-aluno" data-id="' + a.id);
         if (a.dataNascimento && a.dataNascimento.slice(5) === HOJE.slice(5)) add('Aniversário', '🎂 ' + esc(a.nome), 'ver-aluno" data-id="' + a.id);
       });
     }
@@ -1577,8 +1579,67 @@
     dlgMoverTurma(id, alvo.dataset.sala);
   });
 
+  /* ---------- Responsável do aluno menor de idade ----------
+     Fica no cadastro do aluno (a.menor e a.responsavel), porque é o mesmo em todas as matrículas.
+     Para o contrato e o Asaas, o mínimo é nome, CPF e telefone do responsável. */
+  const CAMPOS_RESPONSAVEL = [
+    { id: 'nome', nome: 'Nome do responsável', ph: 'Nome completo', obrig: true },
+    { id: 'parentesco', nome: 'Parentesco', tipo: 'select', opcoes: ['Mãe', 'Pai', 'Avó', 'Avô', 'Tia', 'Tio', 'Outro'] },
+    { id: 'cpf', nome: 'CPF do responsável', ph: '000.000.000-00', obrig: true },
+    { id: 'rg', nome: 'RG do responsável', ph: '' },
+    { id: 'dataNascimento', nome: 'Nascimento do responsável', tipo: 'date' },
+    { id: 'telefone', nome: 'Telefone do responsável', ph: '(21) 99999-9999', obrig: true },
+    { id: 'email', nome: 'E-mail do responsável', ph: 'nome@email.com' },
+    { id: 'endereco', nome: 'Endereço do responsável', ph: 'Deixe vazio se for o mesmo do aluno' }
+  ];
+  function idadeEm(nasc, ref) {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(nasc || '')) return null;
+    let i = Number(ref.slice(0, 4)) - Number(nasc.slice(0, 4));
+    if (ref.slice(5) < nasc.slice(5)) i--;
+    return i;
+  }
+  function alunoEhMenor(a) {
+    if (!a) return false;
+    if (a.menor != null) return !!a.menor;
+    const i = idadeEm(a.dataNascimento, HOJE);
+    return i != null && i < 18;
+  }
+  function faltaResponsavel(a) {
+    if (!alunoEhMenor(a)) return [];
+    const r = a.responsavel || {};
+    return CAMPOS_RESPONSAVEL.filter(function (c) { return c.obrig && !String(r[c.id] || '').trim(); }).map(function (c) { return c.nome.replace(' do responsável', '').replace('Nome', 'nome'); });
+  }
+  function camposResponsavelHTML(r, act, extra) {
+    return '<div class="campos-matricula">' + CAMPOS_RESPONSAVEL.map(function (c) {
+      const v = r[c.id] || '';
+      const attrs = ' data-act="' + act + '" data-campo="' + c.id + '"' + (extra || '');
+      const lab = '<label>' + esc(c.nome) + (c.obrig ? ' *' : '') + '</label>';
+      if (c.tipo === 'select') return '<div class="campo">' + lab + '<select' + attrs + '><option value="">Selecione…</option>' + c.opcoes.map(function (o) { return '<option' + (v === o ? ' selected' : '') + '>' + o + '</option>'; }).join('') + '</select></div>';
+      return '<div class="campo">' + lab + '<input type="' + (c.tipo || 'text') + '"' + attrs + ' value="' + esc(v) + '"' + (c.ph ? ' placeholder="' + esc(c.ph) + '"' : '') + '></div>';
+    }).join('') + '</div>';
+  }
+  /* Texto com os dados do aluno e do responsável, para colar no contrato ou no cadastro do Asaas. */
+  function textoDadosContrato(a, m) {
+    const t = m ? D.turmaPorId[m.turmaId] : null;
+    const linhas = ['ALUNO', 'Nome: ' + a.nome, 'Nascimento: ' + (a.dataNascimento ? L.fmtCurta(a.dataNascimento) + '/' + a.dataNascimento.slice(0, 4) : '—'), 'CPF: ' + (a.cpf || '—'), 'RG: ' + (a.rg || '—'), 'Endereço: ' + (a.endereco || '—') + (a.cep ? ' · CEP ' + a.cep : ''), 'Telefone: ' + (a.telefone || '—'), 'E-mail: ' + (a.email || '—')];
+    if (m) linhas.push('Turma: ' + (t ? t.turma + ' · ' + t.dia + ' ' + t.horario : m.turmaNome) + ' · início ' + L.fmtCurta(m.dataInicio) + ' · contrato até ' + L.fmtCurta(m.contratoFim), 'Mensalidade: ' + (fmtReais(m.valorMensalidade) || '—') + ' · vencimento dia ' + (a.diaVencimento || '—'));
+    if (alunoEhMenor(a)) {
+      const r = a.responsavel || {};
+      linhas.push('', 'RESPONSÁVEL (aluno menor de idade)', 'Nome: ' + (r.nome || '—') + (r.parentesco ? ' (' + r.parentesco + ')' : ''), 'CPF: ' + (r.cpf || '—'), 'RG: ' + (r.rg || '—'), 'Nascimento: ' + (r.dataNascimento ? L.fmtCurta(r.dataNascimento) + '/' + r.dataNascimento.slice(0, 4) : '—'), 'Telefone: ' + (r.telefone || '—'), 'E-mail: ' + (r.email || '—'), 'Endereço: ' + (r.endereco || a.endereco || '—'));
+    }
+    return linhas.join('\n');
+  }
+  function linhaResponsavelMatricula(m) {
+    const a = D.alunoPorId[m.alunoId];
+    if (!alunoEhMenor(a)) return '';
+    const r = a.responsavel || {}, falta = faltaResponsavel(a);
+    return '<div class="ct-linha"><span class="tag tag-neutro">Menor de idade</span> Responsável: ' + (r.nome ? '<b>' + esc(r.nome) + '</b>' + (r.parentesco ? ' (' + esc(r.parentesco) + ')' : '') + (r.cpf ? ' · CPF ' + esc(r.cpf) : '') + (r.telefone ? ' · ' + esc(r.telefone) : '') : '—') +
+      (falta.length ? ' <span class="tag tag-erro">falta ' + esc(falta.join(', ')) + '</span> <button class="link" type="button" data-act="abrir-responsavel" data-id="' + a.id + '">preencher</button>' : '') + '</div>';
+  }
+
   /* ---------- Matrículas ---------- */
   function checklistCompleta(m) {
+    if (faltaResponsavel(D.alunoPorId[m.alunoId]).length) return false;
     return !!(m.checklist.sistemaWashington && m.checklist.contratoAssinado && m.checklist.materialCobrado && (m.formaPagamento === 'unidade' || m.checklist.boletoAsaas));
   }
   const fmtReais = function (v) { const n = Number(normalizarValorMoeda(v)); return (v === '' || v == null || isNaN(n)) ? '' : 'R$ ' + n.toFixed(2).replace('.', ','); };
@@ -1597,6 +1658,7 @@
       '<div class="ct-linha">Turma: ' + esc(t ? t.turma : m.turmaNome) + (t ? (' · ' + esc(t.dia) + ' ' + esc(t.horario)) : '') + '</div>' +
       '<div class="ct-linha">Início: ' + esc(m.dataInicio) + ' · Contrato até ' + esc(m.contratoFim) + ' ' + tagContrato + '</div>' +
       '<div class="ct-linha">Pagamento: ' + (m.formaPagamento === 'unidade' ? 'Na unidade' : 'Asaas') + (m.dataPagamento ? (' · pago em ' + esc(m.dataPagamento)) : '') + '</div>' +
+      linhaResponsavelMatricula(m) +
       '<div class="ct-linha">Mensalidade: ' + (fmtReais(m.valorMensalidade) || '—') + (m.desconto && m.desconto.tem ? ('<span class="tag tag-aviso">Desconto no 1º mês' + (m.desconto.valor ? (': ' + esc(fmtReais(m.desconto.valor))) : '') + '</span>') : '') + '</div>' +
       (m.desconto && m.desconto.tem && m.desconto.obs ? ('<div class="ct-linha muted">Obs. desconto: ' + esc(m.desconto.obs) + '</div>') : '') +
       '<div class="ct-linha">Material: ' + esc(m.livro || '—') + (m.valorMaterial ? (' · ' + esc(fmtReais(m.valorMaterial))) : '') + '</div>' +
@@ -1608,6 +1670,7 @@
       '<div class="ct-acoes">' +
       (D.alunoPorId[m.alunoId] && D.alunoPorId[m.alunoId].telefone ? ('<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(D.alunoPorId[m.alunoId].telefone, L.mensagemMaterialDidatico(D.alunoPorId[m.alunoId], t, m.livro)) + '">Avisar sobre o livro</a>' +
         '<button class="btn sm' + (D.alunoPorId[m.alunoId].materialDidatico.enviado ? ' on-ok' : '') + '" type="button" data-act="marcar-material" data-id="' + m.alunoId + '">' + (D.alunoPorId[m.alunoId].materialDidatico.enviado ? '✓ Avisado' : '✓ Marcar como avisado') + '</button>') : '<span class="muted">Cadastre o telefone do aluno para avisar sobre o livro</span>') +
+      (D.alunoPorId[m.alunoId] ? '<button class="btn sm" type="button" data-act="copiar-dados-contrato" data-id="' + m.id + '">Copiar dados p/ contrato e Asaas</button>' : '') +
       '<button class="btn sm" type="button" data-act="editar-matricula" data-id="' + m.id + '">Editar matrícula</button>' +
       (dias != null && dias <= 30 ? ('<button class="btn sm on" type="button" data-act="renovar-matricula" data-id="' + m.id + '">Renovar matrícula</button>') : '') +
       '<button class="btn sm" type="button" data-act="excluir-matricula" data-id="' + m.id + '">Excluir matrícula</button>' +
@@ -1669,6 +1732,15 @@
       '<div class="campo"><label>Livro didático (qual)</label><input type="text" data-act="nm-livro" value="' + esc(nm.livro) + '" placeholder="Nome do livro"></div>' +
       '<div class="campo"><label>Valor do material (R$)</label><input type="text" inputmode="decimal" data-act="nm-valor-material" value="' + esc(nm.valorMaterial) + '" placeholder="Ex.: 298.20"></div>' +
       '</div>' +
+      (function () {
+        const alunoSel = nm.alunoId ? D.alunoPorId[nm.alunoId] : null;
+        const idade = idadeEm(alunoSel ? alunoSel.dataNascimento : nm.dataNascimento, HOJE);
+        return '<div class="bloco-menor">' +
+          '<div class="check"><label><input type="checkbox" data-act="nm-menor"' + (nm.menor ? ' checked' : '') + '> <b>Aluno menor de idade</b>: preencher os dados do responsável (contrato e Asaas)</label></div>' +
+          (idade != null && idade < 18 && !nm.menor ? '<p class="aviso aviso-atencao">Pela data de nascimento, o aluno tem ' + idade + ' anos. Marque a caixa acima e preencha o responsável.</p>' : '') +
+          (nm.menor ? camposResponsavelHTML(nm.resp, 'nm-resp') + '<p class="muted mini">* obrigatório para o checklist ficar completo.</p>' : '') +
+          '</div>';
+      })() +
       '<div class="check"><label><input type="checkbox" data-act="nm-desconto-tem"' + (nm.descontoTem ? ' checked' : '') + '> Teve desconto especial no primeiro mês</label></div>' +
       (nm.descontoTem ? ('<div class="campos-matricula">' +
         '<div class="campo"><label>Valor com desconto (R$)</label><input type="text" inputmode="decimal" data-act="nm-desconto-valor" value="' + esc(nm.descontoValor) + '" placeholder="Valor cobrado no 1º mês"></div>' +
@@ -2353,9 +2425,43 @@
       '<button class="btn on" type="button" data-act="add-pendencia">Adicionar</button>' +
       '</section>' +
       '<div class="filtros">' +
+      '<div class="semana-modo"><button class="btn sm' + (V.pendModo !== 'calendario' ? ' on' : '') + '" type="button" data-act="pend-modo" data-v="lista">Lista</button><button class="btn sm' + (V.pendModo === 'calendario' ? ' on' : '') + '" type="button" data-act="pend-modo" data-v="calendario">Calendário</button></div>' +
       '<select data-act="filtro-pendencia"><option value="abertas"' + (V.fPendencia === 'abertas' ? ' selected' : '') + '>Em aberto (' + nAbertas + ')</option><option value="cobranca"' + (V.fPendencia === 'cobranca' ? ' selected' : '') + '>Cobranças em aberto (' + nCobranca + ')</option><option value="todas"' + (V.fPendencia === 'todas' ? ' selected' : '') + '>Todas (' + S.pendencias.length + ')</option></select>' +
       '</div>' +
-      (lista.length ? ('<div class="lista-pendencias">' + lista.map(linhaPendencia).join('') + '</div>') : '<p class="muted">Nenhuma pendência' + (V.fPendencia === 'abertas' ? ' em aberto' : V.fPendencia === 'cobranca' ? ' de cobrança em aberto' : '') + '.</p>');
+      (V.pendModo === 'calendario' ? calendarioPendencias(lista) :
+      (lista.length ? ('<div class="lista-pendencias">' + lista.map(linhaPendencia).join('') + '</div>') : '<p class="muted">Nenhuma pendência' + (V.fPendencia === 'abertas' ? ' em aberto' : V.fPendencia === 'cobranca' ? ' de cobrança em aberto' : '') + '.</p>'));
+  }
+  /* Calendário do mês com as pendências no dia do prazo (mesmo filtro da lista). Tocar num dia
+     mostra as pendências dele embaixo e deixa criar uma nova já com esse prazo. */
+  function calendarioPendencias(lista) {
+    const pad2 = function (n) { return (n < 10 ? '0' : '') + n; };
+    const iso = function (d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); };
+    const h0 = new Date(HOJE + 'T00:00:00');
+    const tm = h0.getMonth() + (V.pendMesOffset || 0);
+    const ano = h0.getFullYear() + Math.floor(tm / 12), mes = ((tm % 12) + 12) % 12;
+    const ini = new Date(ano, mes, 1); ini.setDate(ini.getDate() - ((ini.getDay() + 6) % 7));
+    const ult = new Date(ano, mes + 1, 0); const fim = new Date(ult); fim.setDate(fim.getDate() + (6 - ((ult.getDay() + 6) % 7)));
+    const porDia = {};
+    lista.forEach(function (p) { if (p.prazo) (porDia[p.prazo] = porDia[p.prazo] || []).push(p); });
+    const semPrazo = lista.filter(function (p) { return !p.prazo; });
+    const atrasadasAntes = lista.filter(function (p) { return !p.resolvida && p.prazo && p.prazo < HOJE && p.prazo < iso(new Date(ano, mes, 1)); }).length;
+    let cel = '';
+    for (let d = new Date(ini); d <= fim; d.setDate(d.getDate() + 1)) {
+      const k = iso(d), its = porDia[k] || [];
+      cel += '<div class="mes-dia' + (d.getMonth() === mes ? '' : ' fora-do-mes') + (k === HOJE ? ' hoje' : '') + (V.pendDiaSel === k ? ' selecionado' : '') + '" data-act="pend-dia" data-data="' + k + '">' +
+        '<div class="mes-dia-num">' + d.getDate() + '</div><div class="mes-dia-itens">' +
+        its.slice(0, 3).map(function (p) { const atr = !p.resolvida && p.prazo < HOJE; return '<div class="mes-item pend-item' + (p.resolvida ? ' resolvida' : atr ? ' atrasada' : '') + '" title="' + esc(p.texto) + '">' + esc(p.texto) + '</div>'; }).join('') +
+        (its.length > 3 ? '<div class="mes-mais">+' + (its.length - 3) + ' mais</div>' : '') + '</div></div>';
+    }
+    const sel = V.pendDiaSel ? (porDia[V.pendDiaSel] || []) : [];
+    return '<div class="filtros"><button class="btn sm" type="button" data-act="pend-mes" data-d="-1">← Mês anterior</button><button class="btn sm" type="button" data-act="pend-mes" data-d="0">Hoje</button><button class="btn sm" type="button" data-act="pend-mes" data-d="1">Próximo mês →</button>' +
+      '<b>' + esc(NOMES_MESES[mes] + ' de ' + ano) + '</b></div>' +
+      (atrasadasAntes ? '<p class="aviso aviso-atencao">' + atrasadasAntes + ' pendência(s) atrasada(s) de meses anteriores. <button class="link" type="button" data-act="pend-modo" data-v="lista">Ver na lista</button></p>' : '') +
+      '<div class="mes-cabecalho">' + L.DIAS_ORDEM.map(function (d) { return '<div>' + d + '</div>'; }).join('') + '</div>' +
+      '<div class="mes-grade">' + cel + '</div>' +
+      '<p class="muted mini"><span class="pend-leg atrasada"></span> atrasada · <span class="pend-leg"></span> em aberto' + (V.fPendencia === 'todas' ? ' · <span class="pend-leg resolvida"></span> resolvida' : '') + (semPrazo.length ? ' · ' + semPrazo.length + ' sem prazo (só aparecem na lista)' : '') + '</p>' +
+      (V.pendDiaSel ? ('<section class="bloco" id="pend-dia-sel"><div class="ct-topo"><h2>' + esc(L.fmtLonga ? L.fmtLonga(V.pendDiaSel) : L.fmtCurta(V.pendDiaSel)) + '</h2><button class="btn sm on" type="button" data-act="pend-nova-no-dia" data-data="' + V.pendDiaSel + '">+ Nova pendência neste dia</button></div>' +
+        (sel.length ? '<div class="lista-pendencias">' + sel.map(linhaPendencia).join('') + '</div>' : '<p class="muted">Nenhuma pendência com prazo neste dia.</p>') + '</section>') : '<p class="muted">Toque em um dia para ver as pendências dele ou criar uma nova com esse prazo.</p>');
   }
 
   /* ---------- Comunicados (mensagens em massa para alunos) ---------- */
@@ -2644,6 +2750,10 @@
             (g.emAula.length ? '<span class="tag tag-aviso">em aula agora</span>' : '') +
             '</div>' +
             (g.pendentes.length ? ('<ul class="lista-alunos">' + g.pendentes.map(linhaPendentePonto).join('') + '</ul>') : '') +
+            (g.repetidas.length ? ('<details class="ponto-rep"><summary>' + g.repetidas.length + ' batida(s) repetida(s), que o painel já ignora na conta</summary>' +
+              '<p class="muted mini">Toque duplo no botão ou horário lançado de novo. Pode apagar sem medo: a aula continua contando pela primeira batida.</p><ul class="lista-alunos">' +
+              g.repetidas.map(function (x) { return '<li class="aluno-turma-linha"><div>' + esc(L.fmtCurta(L.dataLocal(x.reg.em))) + ' · ' + (x.reg.tipo === 'entrada' ? 'entrada ' : 'saída ') + '<b>' + esc(L.horaLocal(x.reg.em)) + '</b> <span class="muted">(repete a de ' + esc(L.horaLocal(x.original.em)) + ')</span>' + (x.reg.manual ? ' <span class="tag tag-neutro">lançada à mão</span>' : '') + '</div><div class="aluno-turma-acoes"><button class="btn sm" type="button" data-act="ponto-excluir-batida" data-id="' + esc(x.reg.id) + '" data-semconfirmar="1">Apagar</button></div></li>'; }).join('') +
+              '</ul><div class="ct-acoes"><button class="btn sm" type="button" data-act="ponto-apagar-repetidas" data-prof="' + esc(id) + '">Apagar as ' + g.repetidas.length + ' repetidas</button></div></details>') : '') +
             (g.aulas.length ? ('<div style="overflow-x:auto"><table class="tabela"><thead><tr><th>Data</th><th>Turma</th><th>Entrada</th><th>Saída</th><th>Tempo</th><th>Observação</th><th></th></tr></thead><tbody>' +
               g.aulas.slice().reverse().map(linhaAulaPonto).join('') + '</tbody></table></div>') : '') +
             '<div class="ct-acoes">' +
@@ -2701,6 +2811,16 @@
       '<button class="btn sm" type="button" data-act="ponto-apagar-aula" data-e="' + esc(e.id) + '" data-s="' + esc(s.id) + '">Apagar esta aula</button></div>' +
       '</div></article>');
   }
+  /* Todas as batidas do professor naquele dia, em ordem: ajuda a ver o que está atrapalhando antes
+     de completar (ex.: uma entrada repetida). */
+  function blocoBatidasDoDia(profId, dia, destaqueId) {
+    const doDia = (V.pontoRegs || []).filter(function (x) { return x.profId === profId && L.dataLocal(x.em) === dia; }).sort(function (a, b) { return a.em - b.em; });
+    if (!doDia.length) return '';
+    return '<h4>Batidas desse professor no dia</h4><ul class="lista-alunos">' + doDia.map(function (x) {
+      return '<li class="aluno-turma-linha' + (x.id === destaqueId ? ' destaque' : '') + '"><div>' + (x.tipo === 'entrada' ? 'Entrada' : 'Saída') + ' <b>' + esc(L.horaLocal(x.em)) + '</b>' + (x.turma ? ' · ' + esc(x.turma) : '') + (x.manual ? ' <span class="tag tag-neutro">à mão</span>' : '') + '</div>' +
+        '<div class="aluno-turma-acoes"><button class="btn sm" type="button" data-act="ponto-excluir-batida" data-id="' + esc(x.id) + '" data-reabrir="' + esc(destaqueId || '') + '">Apagar</button></div></li>';
+    }).join('') + '</ul>';
+  }
   function dlgCompletarBatida(id) {
     const r = (V.pontoRegs || []).find(function (x) { return x.id === id; });
     if (!r) return;
@@ -2709,7 +2829,9 @@
       '<div class="dlg-corpo">' +
       '<p class="muted">' + esc(L.fmtLonga(L.dataLocal(r.em))) + ' · ' + (r.tipo === 'entrada' ? 'entrou' : 'saiu') + ' às <b>' + esc(L.horaLocal(r.em)) + '</b>' + (r.turma ? (' · ' + esc(r.turma)) : '') + '</p>' +
       '<div class="campo"><label>Horário da ' + falta + '</label><input type="time" id="pc-hora"></div>' +
+      '<p class="login-erro" id="pc-erro" hidden></p>' +
       '<div class="ct-acoes"><button class="btn sm on" type="button" data-act="ponto-salvar-completar" data-id="' + esc(r.id) + '">Salvar</button></div>' +
+      blocoBatidasDoDia(r.profId, L.dataLocal(r.em), r.id) +
       '</div></article>');
   }
   function imprimirQrPonto() {
@@ -2905,6 +3027,8 @@
       if (rem.livroDidatico && rem.livroDidatico.comprado) manter.livroDidatico.comprado = true;
       if (rem.livroDidatico && rem.livroDidatico.qual && !manter.livroDidatico.qual) manter.livroDidatico.qual = rem.livroDidatico.qual;
       ['ocorrencias', 'acordos', 'historicoCobranca'].forEach(function (k) { manter[k] = (manter[k] || []).concat(rem[k] || []); });
+      if (rem.responsavel && !(manter.responsavel && manter.responsavel.nome)) { manter.responsavel = rem.responsavel; if (rem.menor != null) manter.menor = rem.menor; }
+      if (rem.continuidade) manter.continuidade = Object.assign({}, rem.continuidade, manter.continuidade || {});
       if (rem.pagamento && (rem.pagamento.pagamentos || []).length) manter.pagamento.pagamentos = (manter.pagamento.pagamentos || []).concat(rem.pagamento.pagamentos);
       if ((!manter.pagamento.status || manter.pagamento.status === 'desconhecido') && rem.pagamento && rem.pagamento.status) manter.pagamento = Object.assign({}, rem.pagamento, { pagamentos: manter.pagamento.pagamentos });
       (rem.turmas || []).forEach(function (x) {
@@ -3023,9 +3147,71 @@
     setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
   /* ---------- Alunos (com Matrículas e Material dentro) ---------- */
+  /* ---------- Rematrícula: o aluno sinaliza se continua no próximo semestre ----------
+     Contrato semestral: no fim de cada semestre a gente pergunta se o aluno vai continuar. A resposta
+     fica em a.continuidade[semestre seguinte] = { resposta, obs, data, autor }. */
+  const RESPOSTAS_CONTINUIDADE = [
+    { id: 'vai continuar', nome: 'Vai continuar', tag: 'tag-ok' },
+    { id: 'em dúvida', nome: 'Em dúvida', tag: 'tag-aviso' },
+    { id: 'não vai continuar', nome: 'Não vai continuar', tag: 'tag-erro' }
+  ];
+  function proximoSemestre(sem) {
+    const s0 = sem || L.semestreDeData(HOJE); const ano = Number(s0.slice(0, 4));
+    return s0.slice(-1) === '1' ? ano + '.2' : (ano + 1) + '.1';
+  }
+  function respostaContinuidade(a, sem) { return ((a.continuidade || {})[sem || proximoSemestre()]) || {}; }
+  function tagContinuidade(a) {
+    const r = respostaContinuidade(a);
+    const o = RESPOSTAS_CONTINUIDADE.find(function (x) { return x.id === r.resposta; });
+    return o ? '<span class="tag ' + o.tag + '">' + o.nome + '</span>' : '<span class="tag tag-neutro">sem resposta</span>';
+  }
+  function alunosDaContinuidade() {
+    const sem = L.semestreDeData(HOJE);
+    return S.alunos.filter(function (a) { return !alunoEstaCancelado(a) && (a.turmas || []).some(function (x) { return x.semestre === sem; }); });
+  }
+  function selectContinuidade(a) {
+    const r = respostaContinuidade(a);
+    return '<select class="sel-cont" data-act="cont-resposta" data-id="' + a.id + '" aria-label="Rematrícula de ' + esc(a.nome) + '"><option value="">Sem resposta</option>' +
+      RESPOSTAS_CONTINUIDADE.map(function (o) { return '<option value="' + o.id + '"' + (r.resposta === o.id ? ' selected' : '') + '>' + o.nome + '</option>'; }).join('') + '</select>';
+  }
+  function viewContinuidade() {
+    const prox = proximoSemestre();
+    const todos = alunosDaContinuidade();
+    const cont = {}; RESPOSTAS_CONTINUIDADE.forEach(function (o) { cont[o.id] = 0; }); let sem = 0;
+    todos.forEach(function (a) { const r = respostaContinuidade(a).resposta; if (r) cont[r]++; else sem++; });
+    const f = V.contFiltro || 'sem';
+    const turmasSem = S.turmas.filter(function (t) { return t.semestre === L.semestreDeData(HOJE); }).sort(function (a, b) { return L.norm(a.turma).localeCompare(L.norm(b.turma)); });
+    let lista = todos.filter(function (a) { const r = respostaContinuidade(a).resposta || ''; return f === 'todos' ? true : f === 'sem' ? !r : r === f; });
+    if (V.contTurma) lista = lista.filter(function (a) { return (a.turmas || []).some(function (x) { return x.turmaId === V.contTurma; }); });
+    lista.sort(function (x, y) { return L.norm(x.nome).localeCompare(L.norm(y.nome)); });
+    const pct = todos.length ? Math.round(cont['vai continuar'] / todos.length * 100) : 0;
+    return '<div class="topo"><h1>Alunos</h1></div>' +
+      '<p class="muted">Contrato semestral: até o fim de ' + esc(L.semestreDeData(HOJE)) + ', cada aluno precisa dizer se continua em <b>' + esc(prox) + '</b>. Marque aqui a resposta assim que ele avisar.</p>' +
+      '<div class="stats-topo">' +
+      '<div class="stat-tile"><b>' + cont['vai continuar'] + '</b><span>vão continuar (' + pct + '% de ' + todos.length + ')</span></div>' +
+      '<div class="stat-tile"><b>' + cont['em dúvida'] + '</b><span>em dúvida</span></div>' +
+      '<div class="stat-tile"><b>' + cont['não vai continuar'] + '</b><span>não vão continuar</span></div>' +
+      '<div class="stat-tile"><b>' + sem + '</b><span>ainda sem resposta</span></div>' +
+      '</div>' +
+      subAbas('cont-filtro', f, [['sem', 'Sem resposta', sem], ['vai continuar', 'Vão continuar', cont['vai continuar']], ['em dúvida', 'Em dúvida', cont['em dúvida']], ['não vai continuar', 'Não vão', cont['não vai continuar']], ['todos', 'Todos', todos.length]]) +
+      '<div class="filtros"><select data-act="cont-turma"><option value="">Todas as turmas</option>' + turmasSem.map(function (t) { return '<option value="' + t.id + '"' + (V.contTurma === t.id ? ' selected' : '') + '>' + esc(t.turma + ' · ' + t.dia + ' ' + t.horario) + '</option>'; }).join('') + '</select></div>' +
+      (lista.length ? ('<div class="tabela-rolagem"><table class="tabela tabela-cont"><thead><tr><th>Aluno</th><th>Turma</th><th>Contrato</th><th>Vai continuar em ' + esc(prox) + '?</th><th>Observação</th><th></th></tr></thead><tbody>' +
+        lista.map(function (a) {
+          const r = respostaContinuidade(a);
+          const t0 = turmasAtuaisAluno(a)[0];
+          const turma = t0 ? D.turmaPorId[t0.turmaId] : null;
+          return '<tr><td><button class="link" type="button" data-act="ver-aluno" data-id="' + a.id + '"><b>' + esc(a.nome) + '</b></button>' + (r.resposta ? '<div class="muted mini">' + esc((r.autor || '') + (r.data ? ' · ' + L.fmtCurta(r.data.slice(0, 10)) : '')) + '</div>' : '') + '</td>' +
+            '<td>' + esc(turmasAtuaisAluno(a).map(function (x) { return x.turma; }).join(', ')) + '</td>' +
+            '<td>' + celulaRematricula(a) + '</td>' +
+            '<td>' + selectContinuidade(a) + '</td>' +
+            '<td><input type="text" data-act="cont-obs" data-id="' + a.id + '" value="' + esc(r.obs || '') + '" placeholder="Ex.: vai mudar de horário; viagem"></td>' +
+            '<td>' + (a.telefone ? '<a class="btn sm" target="_blank" rel="noopener" href="' + L.linkWhatsApp(a.telefone, L.mensagemRematricula(a, turma || t0)) + '">Perguntar</a>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table></div>') : '<p class="muted">Ninguém nesta lista.</p>');
+  }
   function viewAlunosGeral() {
-    const abas = subAbas('alunos-sec', V.alunosSec, [['alunos', 'Alunos'], ['matriculas', 'Matrículas'], ['material', 'Material']]);
-    const corpo = V.alunosSec === 'matriculas' ? viewMatriculas() : V.alunosSec === 'material' ? viewMaterial() : viewAlunos();
+    const semRespRemat = alunosDaContinuidade().filter(function (a) { return !respostaContinuidade(a).resposta; }).length;
+    const abas = subAbas('alunos-sec', V.alunosSec, [['alunos', 'Alunos'], ['matriculas', 'Matrículas'], ['material', 'Material'], ['continuidade', 'Rematrícula ' + proximoSemestre(), semRespRemat]]);
+    const corpo = V.alunosSec === 'matriculas' ? viewMatriculas() : V.alunosSec === 'material' ? viewMaterial() : V.alunosSec === 'continuidade' ? viewContinuidade() : viewAlunos();
     return inserirAbas(corpo, abas);
   }
   /* Turmas do semestre atual (ou, se o aluno não tiver nenhuma, as do último semestre dele). */
@@ -3210,6 +3396,9 @@
       '</div>' +
       '<div class="check"><label><input type="checkbox" data-act="bolsista-aluno" data-id="' + a.id + '"' + (a.bolsista ? ' checked' : '') + '> Aluno bolsista (não entra na cobrança/inadimplência)</label></div>';
     const rematricula =
+      '<div class="campos-matricula"><div class="campo"><label>Vai continuar em ' + esc(proximoSemestre()) + '?</label>' + selectContinuidade(a) + '</div>' +
+      '<div class="campo"><label>Observação</label><input type="text" data-act="cont-obs" data-id="' + a.id + '" value="' + esc(respostaContinuidade(a).obs || '') + '" placeholder="Ex.: vai mudar de horário"></div></div>' +
+      (respostaContinuidade(a).resposta ? '<p class="muted mini">Marcado por ' + esc(respostaContinuidade(a).autor || '—') + (respostaContinuidade(a).data ? ' em ' + esc(L.fmtCurta(respostaContinuidade(a).data.slice(0, 10))) : '') + '</p>' : '') +
       '<p>' + (cic ? ('Contrato até <b>' + esc(L.fmtCurta(cic.contratoFim)) + '</b> (' + (cic.dias < 0 ? 'venceu há ' + Math.abs(cic.dias) + ' dia(s)' : 'faltam ' + cic.dias + ' dia(s)') + ', contado pela ' + cic.origem + ')') : 'Preencha a data em que o aluno começou (em Cadastro) ou registre a matrícula para o painel contar o prazo.') + '</p>' +
       '<p class="muted">O botão de rematrícula libera 30 dias antes do fim do contrato. Contratos de ' + CICLO_CONTRATO_DIAS + ' dias (semestral).</p>' +
       '<div class="ct-acoes">' +
@@ -3253,10 +3442,13 @@
       '<div class="dlg-corpo">' +
       '<p class="muted">' + esc(atuais.map(function (x) { return x.turma; }).join(', ') || 'sem turma') + ' · ' + selosPagamentoAluno(a) + (a.telefone ? (' · ' + esc(a.telefone)) : '') + '</p>' +
       secaoAluno('cadastro', 'Cadastro', '', cadastro) +
+      secaoAluno('responsavel', 'Responsável (menor de idade)', alunoEhMenor(a) ? (faltaResponsavel(a).length ? '<span class="tag tag-erro">falta ' + esc(faltaResponsavel(a).join(', ')) + '</span>' : esc((a.responsavel || {}).nome || '')) : '<span class="muted">não é menor</span>',
+        '<div class="check"><label><input type="checkbox" data-act="menor-aluno" data-id="' + a.id + '"' + (alunoEhMenor(a) ? ' checked' : '') + '> Aluno menor de idade (contrato e Asaas no nome do responsável)</label></div>' +
+        (alunoEhMenor(a) ? camposResponsavelHTML(a.responsavel || {}, 'resp-aluno', ' data-id="' + a.id + '"') + '<div class="ct-acoes"><button class="btn sm" type="button" data-act="copiar-dados-aluno" data-id="' + a.id + '">Copiar dados p/ contrato e Asaas</button></div>' : '')) +
       secaoAluno('turma', 'Turma e frequência', esc(atuais.map(function (x) { return x.turma; }).join(', ') || '—'), turma) +
       secaoAluno('material', 'Material', a.livroDidatico.comprado ? '<span class="tag tag-ok">Comprado</span>' : '<span class="tag tag-aviso">Não comprado</span>', material) +
       secaoAluno('pagamento', 'Pagamento', selosPagamentoAluno(a), pagamento) +
-      secaoAluno('rematricula', 'Matrícula e rematrícula', cic ? ('⏱ ' + (cic.dias < 0 ? 'venceu' : cic.dias + 'd')) : '', rematricula) +
+      secaoAluno('rematricula', 'Matrícula e rematrícula', tagContinuidade(a) + (cic ? (' ⏱ ' + (cic.dias < 0 ? 'venceu' : cic.dias + 'd')) : ''), rematricula) +
       secaoAluno('mensagens', 'Mensagens no WhatsApp', '', mensagens) +
       secaoAluno('ocorrencias', 'Ocorrências', ocAtivas.length ? ('<span class="tag tag-aviso">' + ocAtivas.length + ' ativa(s)</span>') : '', ocorrencias) +
       secaoAluno('cancelamento', 'Cancelamento ou exclusão', a.cancelado ? '<span class="tag tag-erro">Cancelado</span>' : '', cancelamento) +
@@ -3409,6 +3601,35 @@
     'ver-turma': function (el) { dlgTurma(el.dataset.id); },
     'turmas-aba': function (el) { V.turmasAba = el.dataset.v; render(); },
     'alunos-sec': function (el) { V.alunosSec = el.dataset.v; render(); },
+    'pend-modo': function (el) { V.pendModo = el.dataset.v; render(); },
+    'pend-mes': function (el) { const d = Number(el.dataset.d); V.pendMesOffset = d === 0 ? 0 : (V.pendMesOffset || 0) + d; if (d === 0) V.pendDiaSel = HOJE; render(); },
+    'pend-dia': function (el) { V.pendDiaSel = el.dataset.data; render(); const b = $('#pend-dia-sel'); if (b && b.scrollIntoView) b.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); },
+    'pend-nova-no-dia': function (el) {
+      V.novaPendencia.prazo = el.dataset.data; render(); window.scrollTo(0, 0);
+      const i = document.querySelector('[data-act="pend-texto"]'); if (i) i.focus();
+      toast('Prazo ' + L.fmtCurta(el.dataset.data) + ' já preenchido. Escreva a pendência e clique em Adicionar.');
+    },
+    'cont-filtro': function (el) { V.contFiltro = el.dataset.v; render(); },
+    'cont-turma': function (el) { V.contTurma = el.value; render(); },
+    'cont-resposta': function (el) {
+      const a = D.alunoPorId[el.dataset.id]; if (!a) return;
+      const prox = proximoSemestre();
+      a.continuidade = a.continuidade || {};
+      const ant = a.continuidade[prox] || {};
+      if (!el.value) { if (ant.obs) a.continuidade[prox] = { obs: ant.obs }; else delete a.continuidade[prox]; }
+      else a.continuidade[prox] = { resposta: el.value, obs: ant.obs || '', data: new Date().toISOString(), autor: autorAtual() };
+      LS.set('alunos', S.alunos);
+      registrar('Marcou rematrícula ' + prox, a.nome + ' → ' + (el.value || 'sem resposta'));
+      toast(a.nome.split(' ')[0] + ': ' + (el.value || 'sem resposta'));
+      if (el.closest('dialog')) dlgAluno(a.id); else render();
+    },
+    'cont-obs': function (el) {
+      const a = D.alunoPorId[el.dataset.id]; if (!a) return;
+      const prox = proximoSemestre();
+      a.continuidade = a.continuidade || {};
+      a.continuidade[prox] = Object.assign({}, a.continuidade[prox] || {}, { obs: el.value });
+      LS.set('alunos', S.alunos);
+    },
     'prof-aba': function (el) { V.profAba = el.dataset.v; render(); },
     'vg-periodo': function (el) { V.vgPeriodo = el.dataset.v; render(); },
     'hoje-tudo': function () { V.hojeTudo = true; render(); },
@@ -3517,6 +3738,22 @@
       addHistCobranca(a, t); LS.set('alunos', S.alunos); registrar('Registrou contato de cobrança', a.nome + ': ' + t);
       V.histAberto = a.id; render();
     },
+    'abrir-responsavel': function (el) { V.alunoSecAbertas.responsavel = true; dlgAluno(el.dataset.id); },
+    'menor-aluno': function (el) {
+      const a = D.alunoPorId[el.dataset.id]; if (!a) return;
+      a.menor = el.checked; a.responsavel = a.responsavel || {};
+      LS.set('alunos', S.alunos); registrar('Marcou aluno como ' + (el.checked ? 'menor de idade' : 'maior de idade'), a.nome);
+      V.alunoSecAbertas.responsavel = true; dlgAluno(a.id); recalc(); render();
+    },
+    'resp-aluno': function (el) {
+      const a = D.alunoPorId[el.dataset.id]; if (!a) return;
+      a.responsavel = a.responsavel || {}; a.responsavel[el.dataset.campo] = el.value.trim();
+      if (el.dataset.campo === 'nome' && (!a.responsavelFinanceiro || a.responsavelFinanceiro === a._respAuto)) { a.responsavelFinanceiro = a.responsavel.nome; a._respAuto = a.responsavel.nome; }
+      LS.set('alunos', S.alunos);
+      clearTimeout(V.respRegTimer); V.respRegTimer = setTimeout(function () { registrar('Atualizou dados do responsável', a.nome); }, 1500);
+    },
+    'copiar-dados-aluno': function (el) { const a = D.alunoPorId[el.dataset.id]; if (a) copiar(textoDadosContrato(a, null)); },
+    'copiar-dados-contrato': function (el) { const m = D.matriculaPorId[el.dataset.id]; const a = m && D.alunoPorId[m.alunoId]; if (a) copiar(textoDadosContrato(a, m)); },
     'abrir-rematricula': function (el) { V.alunoSecAbertas.rematricula = true; dlgAluno(el.dataset.id); },
     'oc-aluno-aba': function (el) { V.ocAlunoAba = el.dataset.v; dlgAluno(el.dataset.id); },
     'oc-aluno-add': function (el) {
@@ -4092,7 +4329,14 @@
     },
     'ir-pendencias-cobranca': function () { V.view = 'pendencias'; V.fPendencia = 'cobranca'; render(); },
     /* ---- Matrículas ---- */
-    'nm-aluno': function (el) { V.novaMatricula.alunoId = el.value; render(); },
+    'nm-aluno': function (el) {
+      const nm = V.novaMatricula; nm.alunoId = el.value;
+      const a = D.alunoPorId[el.value];
+      if (a) { nm.menor = alunoEhMenor(a); nm.resp = Object.assign({}, a.responsavel || {}); } else { nm.menor = false; nm.resp = {}; }
+      render();
+    },
+    'nm-menor': function (el) { V.novaMatricula.menor = el.checked; render(); },
+    'nm-resp': function (el) { V.novaMatricula.resp[el.dataset.campo] = el.value; },
     'nm-nome': function (el) { V.novaMatricula.alunoNome = el.value; },
     'nm-turma': function (el) { V.novaMatricula.turmaId = el.value; },
     'nm-data': function (el) { V.novaMatricula.dataInicio = el.value; render(); },
@@ -4106,7 +4350,7 @@
     'nm-desconto-obs': function (el) { V.novaMatricula.descontoObs = el.value; },
     'nm-rg': function (el) { V.novaMatricula.rg = el.value; },
     'nm-cpf': function (el) { V.novaMatricula.cpf = el.value; },
-    'nm-data-nascimento': function (el) { V.novaMatricula.dataNascimento = el.value; },
+    'nm-data-nascimento': function (el) { V.novaMatricula.dataNascimento = el.value; const i = idadeEm(el.value, HOJE); if (i != null && i < 18 && !V.novaMatricula.menor) { V.novaMatricula.menor = true; render(); } },
     'nm-endereco': function (el) { V.novaMatricula.endereco = el.value; },
     'nm-cep': function (el) { V.novaMatricula.cep = el.value; },
     'nm-dia-vencimento': function (el) { V.novaMatricula.diaVencimento = el.value; },
@@ -4137,6 +4381,11 @@
       } else {
         aluno.formaPagamento = nm.formaPagamento || aluno.formaPagamento;
       }
+      if (nm.menor) {
+        const r = {}; CAMPOS_RESPONSAVEL.forEach(function (c) { r[c.id] = String(nm.resp[c.id] || '').trim(); });
+        aluno.menor = true; aluno.responsavel = r;
+        if (!aluno.responsavelFinanceiro && r.nome) aluno.responsavelFinanceiro = r.nome;
+      } else if (nm.alunoId) { aluno.menor = false; }
       aluno.turmas = aluno.turmas || [];
       if (!aluno.turmas.some(function (x) { return x.turmaId === t.id; })) aluno.turmas.push({ turmaId: t.id, semestre: t.semestre, turma: t.turma });
       t.alunosNomes = t.alunosNomes || [];
@@ -4152,11 +4401,12 @@
       };
       S.matriculas.push(matricula);
       LS.set('alunos', S.alunos); LS.set('turmas', S.turmas); LS.set('matriculas', S.matriculas);
-      registrar('Registrou matrícula', aluno.nome + ' em ' + t.turma + ' (início ' + nm.dataInicio + ')');
+      registrar('Registrou matrícula', aluno.nome + ' em ' + t.turma + ' (início ' + nm.dataInicio + ')' + (nm.menor ? ' · menor, responsável ' + (aluno.responsavel.nome || '—') : ''));
       V.novaMatricula = {
         alunoId: '', alunoNome: '', turmaId: '', dataInicio: '', dataPagamento: '', formaPagamento: 'asaas',
         valorMensalidade: '', valorMaterial: '', livro: '', descontoTem: false, descontoValor: '', descontoObs: '',
         rg: '', cpf: '', dataNascimento: '', endereco: '', cep: '', diaVencimento: '',
+        menor: false, resp: {},
       };
       toast('Matrícula registrada e aluno incluído na turma.');
       recalc(); render();
@@ -4763,14 +5013,23 @@
       if (s <= e) { toast('A saída precisa ser depois da entrada.'); return; }
       const autor = autorAtual();
       const base = { profId: m.profId, profNome: prof.nome, turma: m.turma || '', turmaId: '', autor: autor };
+      const regs = V.pontoRegs || [];
+      const pendDia = (pontoPorProfessor()[m.profId] || { pendentes: [] }).pendentes.filter(function (p) { return L.dataLocal(p.reg.em) === m.data; });
+      if (pendDia.length && !confirm(prof.nome + ' já tem batida pendente em ' + L.fmtCurta(m.data) + ' (' + pendDia.map(function (p) { return (p.reg.tipo === 'entrada' ? 'entrada ' : 'saída ') + L.horaLocal(p.reg.em); }).join(', ') + '). O certo é usar "Completar" nessa pendência; lançar uma aula nova vai deixar a batida duplicada. Lançar mesmo assim?')) return;
+      const p1 = L.conferirBatidaNova(regs, Object.assign({}, base, { tipo: 'entrada', em: e }));
+      const p2 = L.conferirBatidaNova(regs.concat([Object.assign({ id: '__e__' }, base, { tipo: 'entrada', em: e })]), Object.assign({}, base, { tipo: 'saida', em: s }));
+      if ((p1 || p2) && !pendDia.length) { toast(p1 || p2); return; }
+      if (V.pontoSalvando) return;
+      V.pontoSalvando = true;
       Promise.all([
         Sync.pontoCriarManual(Object.assign({}, base, { tipo: 'entrada', em: e })),
         Sync.pontoCriarManual(Object.assign({}, base, { tipo: 'saida', em: s })),
       ]).then(function () {
+        V.pontoSalvando = false;
         registrar('Lançou aula à mão no ponto', prof.nome + ' · ' + L.fmtCurta(m.data) + ' ' + m.entrada + '–' + m.saida);
         V.pontoManual = { profId: '', data: HOJE, entrada: '', saida: '', turma: '' };
         toast('Aula lançada.'); render();
-      }, function () { toast('Não consegui salvar. Confira a internet.'); });
+      }, function () { V.pontoSalvando = false; toast('Não consegui salvar. Confira a internet.'); });
     },
     'ponto-editar-aula': function (el) { dlgCorrigirAula(el.dataset.e, el.dataset.s); },
     'ponto-salvar-aula': function (el) {
@@ -4784,13 +5043,16 @@
       if (emS <= emE) { toast('A saída precisa ser depois da entrada.'); return; }
       const autor = autorAtual();
       const mudaE = emE !== e.em || turma !== (e.turma || ''), mudaS = emS !== s.em;
+      if (V.pontoSalvando) return;
+      V.pontoSalvando = true; el.disabled = true;
       Promise.all([
         mudaE ? Sync.pontoAtualizar(e.id, Object.assign({ em: emE, turma: turma, manual: true, autor: autor }, turma !== (e.turma || '') ? { turmaId: '' } : {})) : null,
         mudaS ? Sync.pontoAtualizar(s.id, { em: emS, manual: true, autor: autor }) : null,
       ]).then(function () {
+        V.pontoSalvando = false;
         registrar('Corrigiu aula no ponto', (e.profNome || '') + ' · ' + L.fmtCurta(dia) + ' ' + he + '–' + hs);
         fecharDlg(); toast('Aula corrigida.');
-      }, function () { toast('Não consegui salvar. Confira a internet.'); });
+      }, function () { V.pontoSalvando = false; el.disabled = false; toast('Não consegui salvar. Confira a internet.'); });
     },
     'ponto-apagar-aula': function (el) {
       if (!confirm('Apagar esta aula (entrada e saída)?')) return;
@@ -4808,15 +5070,34 @@
       const em = msDe(L.dataLocal(r.em), hhmm(h));
       const tipo = r.tipo === 'entrada' ? 'saida' : 'entrada';
       if ((tipo === 'saida' && em <= r.em) || (tipo === 'entrada' && em >= r.em)) { toast(tipo === 'saida' ? 'A saída precisa ser depois da entrada.' : 'A entrada precisa ser antes da saída.'); return; }
-      Sync.pontoCriarManual({ profId: r.profId, profNome: r.profNome || '', turma: r.turma || '', turmaId: r.turmaId || '', tipo: tipo, em: em, autor: autorAtual() }).then(function () {
+      const nova = { profId: r.profId, profNome: r.profNome || '', turma: r.turma || '', turmaId: r.turmaId || '', tipo: tipo, em: em, autor: autorAtual() };
+      const problema = L.conferirBatidaNova(V.pontoRegs || [], nova, r.id);
+      if (problema) { const pe = $('#pc-erro'); if (pe) { pe.textContent = problema; pe.hidden = false; } return; }
+      if (V.pontoSalvando) return;
+      V.pontoSalvando = true; el.disabled = true; el.textContent = 'Salvando…';
+      Sync.pontoCriarManual(nova).then(function () {
+        V.pontoSalvando = false;
         registrar('Completou batida no ponto', (r.profNome || '') + ' · ' + L.fmtCurta(L.dataLocal(r.em)) + ' ' + (tipo === 'saida' ? 'saída' : 'entrada') + ' ' + h);
         fecharDlg(); toast('Batida completada.');
-      }, function () { toast('Não consegui salvar. Confira a internet.'); });
+      }, function () { V.pontoSalvando = false; el.disabled = false; el.textContent = 'Salvar'; toast('Não consegui salvar. Confira a internet.'); });
     },
     'ponto-excluir-batida': function (el) {
-      if (!confirm('Apagar esta batida?')) return;
-      Sync.pontoExcluir(el.dataset.id).then(function () { registrar('Apagou batida do ponto', ''); toast('Batida apagada.'); },
-        function () { toast('Não consegui apagar. Confira a internet.'); });
+      if (!el.dataset.semconfirmar && !confirm('Apagar esta batida?')) return;
+      const reabrir = el.dataset.reabrir;
+      const x = (V.pontoRegs || []).find(function (r) { return r.id === el.dataset.id; });
+      Sync.pontoExcluir(el.dataset.id).then(function () {
+        registrar('Apagou batida do ponto', x ? ((x.profNome || '') + ' · ' + L.fmtCurta(L.dataLocal(x.em)) + ' ' + (x.tipo === 'saida' ? 'saída' : 'entrada') + ' ' + L.horaLocal(x.em)) : '');
+        toast('Batida apagada.');
+        if (reabrir) { V.pontoRegs = (V.pontoRegs || []).filter(function (r) { return r.id !== el.dataset.id; }); if (reabrir !== el.dataset.id && (V.pontoRegs || []).some(function (r) { return r.id === reabrir; })) dlgCompletarBatida(reabrir); else fecharDlg(); }
+      }, function () { toast('Não consegui apagar. Confira a internet.'); });
+    },
+    'ponto-apagar-repetidas': function (el) {
+      const g = pontoPorProfessor()[el.dataset.prof]; if (!g || !g.repetidas.length) return;
+      if (!confirm('Apagar ' + g.repetidas.length + ' batida(s) repetida(s) de ' + g.profNome + '? As aulas continuam contando pela primeira batida.')) return;
+      Promise.all(g.repetidas.map(function (x) { return Sync.pontoExcluir(x.reg.id); })).then(function () {
+        registrar('Apagou batidas repetidas do ponto', g.profNome + ' · ' + g.repetidas.length);
+        toast('Repetidas apagadas.');
+      }, function () { toast('Não consegui apagar todas. Confira a internet.'); });
     },
     'ponto-lancar-horas': function (el) {
       const prof = el.dataset.prof, mes = el.dataset.mes, horas = String(el.dataset.horas);

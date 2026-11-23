@@ -358,3 +358,16 @@ Fica em Secretaria. Tem três abas:
 No topo da Visão geral, uma lista do que pede ação no dia, de acordo com o que a pessoa pode ver: parcelas de acordo vencidas ou que vencem hoje, atrasados sem nenhum contato, despesas vencidas, rematrículas dos próximos 7 dias, aniversariantes, compromissos do dia, eventos da semana com checklist incompleto, pendências do dia ou atrasadas e, no fim, as aulas do dia, com um atalho para a chamada.
 
 Na **Inadimplência**, cada aluno aparece numa linha de resumo (valor, dias de atraso, acordo e última cobrança). Clique na linha para abrir o card completo.
+
+## Novidades de 23/11/2026
+
+**Ponto: completar sem duplicar.** Quando o professor toca duas vezes em Entrada ou Saída, ou alguém lança de novo um horário que já existia, a segunda batida (do mesmo tipo, com até 20 minutos de diferença) passa a ser tratada como repetida. Ela fica fora da conta, aparece numa lista à parte e pode ser apagada. Antes, a batida repetida virava "esqueceu a saída", e completar essa pendência criava outra.
+- Ao completar, a janela mostra todas as batidas do professor naquele dia, cada uma com o botão Apagar. O painel não deixa salvar um horário que não fecha a aula; nesse caso, explica o motivo.
+- O botão Salvar trava enquanto grava, e o clique duplo não cria duas batidas.
+- "Lançar aula à mão" avisa quando aquele dia já tem pendência. Nesse caso, o certo é usar Completar.
+
+**Aluno menor de idade.** Na matrícula há a caixa "Aluno menor de idade". Ao marcar, aparecem os dados do responsável: nome, parentesco, CPF, RG, nascimento, telefone, e-mail e endereço. A caixa já vem marcada quando a data de nascimento indica menos de 18 anos. Nome, CPF e telefone do responsável são obrigatórios para o checklist da matrícula ficar completo. O botão "Copiar dados p/ contrato e Asaas" copia os dados do aluno e do responsável num texto só. Na ficha do aluno há a seção "Responsável (menor de idade)".
+
+**Rematrícula do próximo semestre.** Em Alunos › Rematrícula, cada aluno ativo do semestre tem a pergunta "Vai continuar?", com as respostas Vai continuar, Em dúvida e Não vai continuar, e um campo de observação. A tela tem contagem por resposta, filtro por turma e o botão Perguntar, que abre o WhatsApp. A mesma pergunta aparece na ficha do aluno, em Matrícula e rematrícula.
+
+**Pendências no calendário.** Em Pendências, o botão Calendário mostra o mês com cada pendência no dia do prazo: vermelha se atrasada, azul se em aberto. Ao tocar num dia, aparecem as pendências dele e o botão para criar uma nova já com esse prazo.
