@@ -5016,9 +5016,8 @@
       const regs = V.pontoRegs || [];
       const pendDia = (pontoPorProfessor()[m.profId] || { pendentes: [] }).pendentes.filter(function (p) { return L.dataLocal(p.reg.em) === m.data; });
       if (pendDia.length && !confirm(prof.nome + ' já tem batida pendente em ' + L.fmtCurta(m.data) + ' (' + pendDia.map(function (p) { return (p.reg.tipo === 'entrada' ? 'entrada ' : 'saída ') + L.horaLocal(p.reg.em); }).join(', ') + '). O certo é usar "Completar" nessa pendência; lançar uma aula nova vai deixar a batida duplicada. Lançar mesmo assim?')) return;
-      const p1 = L.conferirBatidaNova(regs, Object.assign({}, base, { tipo: 'entrada', em: e }));
-      const p2 = L.conferirBatidaNova(regs.concat([Object.assign({ id: '__e__' }, base, { tipo: 'entrada', em: e })]), Object.assign({}, base, { tipo: 'saida', em: s }));
-      if ((p1 || p2) && !pendDia.length) { toast(p1 || p2); return; }
+      const problema = L.conferirAulaNova(regs, Object.assign({}, base, { em: e }), Object.assign({}, base, { em: s }));
+      if (problema && !pendDia.length) { toast(problema); return; }
       if (V.pontoSalvando) return;
       V.pontoSalvando = true;
       Promise.all([

@@ -586,6 +586,18 @@
     return out;
   }
 
+  /* Confere uma aula inteira lançada à mão (entrada + saída juntas): as duas precisam formar uma
+     aula, sem cair em cima de outra batida do professor no mesmo dia. */
+  function conferirAulaNova(registros, entrada, saida) {
+    const antes = parearPonto(registros, null)[entrada.profId] || { pendentes: [] };
+    const novas = [Object.assign({ id: '__e__' }, entrada, { tipo: 'entrada' }), Object.assign({ id: '__s__' }, saida, { tipo: 'saida' })];
+    const depois = parearPonto((registros || []).concat(novas), null)[entrada.profId];
+    const ehNova = function (r) { return r.id === '__e__' || r.id === '__s__'; };
+    if (depois.repetidas.some(function (x) { return ehNova(x.reg); })) return 'Já existe batida desse professor nesse horário. Confira a lista de aulas antes de lançar de novo.';
+    if (!depois.aulas.some(function (a) { return a.entrada.id === '__e__' && a.saida.id === '__s__'; }) || depois.pendentes.length > antes.pendentes.length) return 'Esse horário cruza com outra batida desse professor no mesmo dia. Confira a lista de aulas dele.';
+    return '';
+  }
+
   /* Confere, antes de gravar, se uma batida nova (completar entrada/saída ou lançar aula à mão)
      vai mesmo resolver a pendência, em vez de criar outra. Devolve '' se está tudo certo ou o
      motivo do problema, em português, pra mostrar na tela. */
@@ -827,7 +839,7 @@
   return {
     asaasLinhas: asaasLinhas, asaasCasarAluno: asaasCasarAluno, asaasPlano: asaasPlano,
     pontoSlug: pontoSlug, fmtHM: fmtHM, dataLocal: dataLocal, horaLocal: horaLocal,
-    periodoFechamento: periodoFechamento, parearPonto: parearPonto, conferirBatidaNova: conferirBatidaNova, compararComHorario: compararComHorario,
+    periodoFechamento: periodoFechamento, parearPonto: parearPonto, conferirBatidaNova: conferirBatidaNova, conferirAulaNova: conferirAulaNova, compararComHorario: compararComHorario,
     DIAS_ORDEM: DIAS_ORDEM, DIAS_FULL: DIAS_FULL,
     norm: norm, diasDaTurma: diasDaTurma, horarioMin: horarioMin, horariosSeSobrepoem: horariosSeSobrepoem,
     turmaOcupaHorario: turmaOcupaHorario, salaOnline: salaOnline, fmtHoraTurma: fmtHoraTurma, fmtHorarioTurma: fmtHorarioTurma, conflitosTurma: conflitosTurma,
