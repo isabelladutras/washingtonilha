@@ -524,21 +524,44 @@
 
   /**
    * Junta as batidas em aulas. Regras:
-   * - entrada abre uma aula; a próxima saída do MESMO dia fecha essa aula;
-   * - duas entradas seguidas → a primeira fica pendente ("sem saída");
+   * - cada entrada abre uma aula; várias podem ficar abertas no mesmo dia (troca de turma);
+   * - a saída fecha uma entrada aberta do MESMO dia, nesta ordem de preferência:
+   *     1) entrada da mesma turma com pelo menos PONTO_TROCA_MIN minutos;
+   *     2) a entrada mais recente com pelo menos PONTO_TROCA_MIN minutos;
+   *     3) se todas forem mais novas que isso, a mais recente.
+   *   Isso resolve a troca de turma batida "ao contrário" (entrada da próxima aula e, segundos
+   *   depois, a saída da anterior): a saída vai pra aula que começou antes, em vez de virar uma
+   *   aula de 0 minutos e deixar duas pendências.
    * - saída sem entrada aberta → pendente ("sem entrada");
-   * - entrada que ficou aberta no fim: se for de hoje, é "em aula agora"; senão, "sem saída".
+   * - entrada que ficou aberta no fim do dia: se for de hoje, é "em aula agora"; senão, "sem saída".
    * Devolve um objeto por profId: { profId, profNome, aulas: [...], pendentes: [...], totalMin }.
    * Cada aula: { data, entrada, saida, turma, turmaId, min }. Cada pendente: { motivo, reg }.
    */
   /* Batida repetida: o professor tocou 2x no mesmo botão (ou a coordenação completou um horário
      que já existia). Mesma pessoa, mesmo tipo, mesmo dia, com até 20 min de diferença e sem nenhuma
-     batida do outro tipo entre as duas. A repetida é ignorada na conta (fica a primeira entrada e
-     a primeira saída) e aparece numa lista à parte, com botão pra apagar. */
+     batida do outro tipo entre as duas (entradas: e da mesma turma). A repetida é ignorada na conta
+     (fica a primeira entrada e a primeira saída) e aparece numa lista à parte, com botão pra apagar. */
   const PONTO_REPETIDA_MIN = 20;
+  const PONTO_TROCA_MIN = 10;
+  function chaveTurmaPonto(r) {
+    if (!r) return '';
+    if (r.turmaId) return 'id:' + r.turmaId;
+    return norm(String(r.turma || '').split('·')[0]).replace(/[^a-z0-9 ]/g, ' ').replace(/s\b/g, '').replace(/\s+/g, ' ').trim();
+  }
+  function mesmaTurmaPonto(a, b) {
+    const ka = chaveTurmaPonto(a), kb = chaveTurmaPonto(b);
+    if (!ka || !kb) return true;
+    if (ka === kb) return true;
+    // uma com turmaId e a outra só com nome: compara pelo nome
+    const na = chaveTurmaPonto({ turma: a.turma }), nb = chaveTurmaPonto({ turma: b.turma });
+    return !!na && na === nb;
+  }
   function parearPonto(registros, hojeISO) {
     const porProf = {};
-    (registros || []).slice().sort(function (a, b) { return a.em - b.em; }).forEach(function (r) {
+    (registros || []).slice().sort(function (a, b) {
+      // empate no mesmo instante: a saída vem antes (fecha a aula anterior antes de abrir a próxima)
+      return (a.em - b.em) || ((a.tipo === 'saida' ? 0 : 1) - (b.tipo === 'saida' ? 0 : 1));
+    }).forEach(function (r) {
       if (!r || !r.profId || !(r.em > 0)) return;
       const g = porProf[r.profId] || (porProf[r.profId] = { profId: r.profId, profNome: r.profNome || r.profId, regs: [] });
       if (r.profNome) g.profNome = r.profNome;
@@ -548,42 +571,90 @@
     Object.keys(porProf).forEach(function (pid) {
       const g = porProf[pid];
       const aulas = [], pendentes = [], emAula = [], repetidas = [];
-      let aberta = null, ultimaSaida = null;
-      function fecharPendente(motivo) { if (aberta) { pendentes.push({ motivo: motivo, reg: aberta }); aberta = null; } }
+      let abertas = [], ultimaSaida = null;
       function perto(a, b) { return a && dataLocal(a.em) === dataLocal(b.em) && (b.em - a.em) <= PONTO_REPETIDA_MIN * 60000; }
+      function fecharDia(hoje) {
+        abertas.forEach(function (a) {
+          if (hoje && dataLocal(a.em) === hoje) emAula.push(a);
+          else pendentes.push({ motivo: 'sem saída', reg: a });
+        });
+        abertas = [];
+      }
       g.regs.forEach(function (r) {
+        if (abertas.length && dataLocal(abertas[0].em) !== dataLocal(r.em)) fecharDia(null);
         if (r.tipo === 'entrada') {
-          if (aberta && perto(aberta, r)) { repetidas.push({ reg: r, original: aberta }); return; }
-          fecharPendente('sem saída');
-          aberta = r; ultimaSaida = null;
+          const orig = abertas.filter(function (a) { return perto(a, r) && mesmaTurmaPonto(a, r); })[0];
+          if (orig) { repetidas.push({ reg: r, original: orig }); return; }
+          abertas.push(r); ultimaSaida = null;
         } else if (r.tipo === 'saida') {
-          if (aberta && dataLocal(aberta.em) === dataLocal(r.em)) {
-            const aula = {
-              data: dataLocal(aberta.em), entrada: aberta, saida: r,
-              turma: aberta.turma || r.turma || '', turmaId: aberta.turmaId || r.turmaId || '',
-              min: Math.round((r.em - aberta.em) / 60000),
-            };
-            aulas.push(aula);
-            aberta = null; ultimaSaida = r;
-          } else if (!aberta && perto(ultimaSaida, r)) {
-            repetidas.push({ reg: r, original: ultimaSaida });
-          } else {
-            fecharPendente('sem saída');
-            pendentes.push({ motivo: 'sem entrada', reg: r });
-            ultimaSaida = null;
-          }
+          const maduras = abertas.filter(function (a) { return r.em - a.em >= PONTO_TROCA_MIN * 60000; });
+          if (!maduras.length && perto(ultimaSaida, r)) { repetidas.push({ reg: r, original: ultimaSaida }); return; }
+          if (!abertas.length) { pendentes.push({ motivo: 'sem entrada', reg: r }); ultimaSaida = null; return; }
+          let alvo;
+          if (maduras.length) {
+            const mesma = maduras.filter(function (a) { return chaveTurmaPonto(a) && mesmaTurmaPonto(a, r); });
+            alvo = mesma.length ? mesma[mesma.length - 1] : maduras[maduras.length - 1];
+          } else alvo = abertas[abertas.length - 1];
+          abertas = abertas.filter(function (a) { return a !== alvo; });
+          aulas.push({
+            data: dataLocal(alvo.em), entrada: alvo, saida: r,
+            turma: alvo.turma || r.turma || '', turmaId: alvo.turmaId || r.turmaId || '',
+            min: Math.round((r.em - alvo.em) / 60000),
+          });
+          ultimaSaida = r;
         }
       });
-      if (aberta) {
-        if (hojeISO && dataLocal(aberta.em) === hojeISO) emAula.push(aberta);
-        else fecharPendente('sem saída');
-      }
+      fecharDia(hojeISO);
+      aulas.sort(function (a, b) { return a.entrada.em - b.entrada.em; });
+      pendentes.sort(function (a, b) { return a.reg.em - b.reg.em; });
       out[pid] = {
         profId: pid, profNome: g.profNome, aulas: aulas, pendentes: pendentes, emAula: emAula, repetidas: repetidas, regs: g.regs,
         totalMin: aulas.reduce(function (s, a) { return s + a.min; }, 0),
       };
     });
     return out;
+  }
+
+  /**
+   * Professor que bate uma entrada só no começo de um bloco de aulas seguidas e uma saída só no
+   * fim (ex.: 14:05 → 16:57 cobrindo Juniors 2 14h-15h e Juniors 4 15h-16h) vira uma aula só.
+   * Esta função divide essa aula pela grade do professor naquele dia da semana: cada turma da
+   * grade que ocupa pelo menos 15 min do intervalo vira um pedaço, cortado no horário em que a
+   * turma seguinte começa. Não mexe nas batidas: é só a forma de mostrar e contar.
+   * `turmas`: [{ id, turma, dia: "SEG/QUA", horario: "14h - 15h" }] do professor.
+   * Cada pedaço tem `dividida: { parte, de }` e mantém entrada/saida com os ids originais.
+   */
+  function dividirAulasPelaGrade(aulas, turmas) {
+    const lista = [];
+    (aulas || []).forEach(function (a) {
+      if (!a || !a.entrada || !a.saida) { lista.push(a); return; }
+      const p = String(a.data).split('-').map(Number);
+      const dSem = DIAS_ORDEM[(new Date(p[0], p[1] - 1, p[2]).getDay() + 6) % 7];
+      const e = new Date(a.entrada.em), s = new Date(a.saida.em);
+      const eMin = e.getHours() * 60 + e.getMinutes(), sMin = s.getHours() * 60 + s.getMinutes();
+      const cand = (turmas || []).map(function (t) { return { t: t, h: horarioMin(t.horario) }; }).filter(function (x) {
+        if (!x.h || diasDaTurma(x.t.dia).indexOf(dSem) < 0) return false;
+        return Math.min(sMin, x.h[1]) - Math.max(eMin, x.h[0]) >= 15;
+      }).sort(function (x, y) { return x.h[0] - y.h[0]; });
+      if (cand.length < 2) { lista.push(a); return; }
+      const inicioDia = new Date(p[0], p[1] - 1, p[2]).getTime();
+      cand.forEach(function (x, i) {
+        const ini = i === 0 ? a.entrada.em : inicioDia + x.h[0] * 60000;
+        const fim = i === cand.length - 1 ? a.saida.em : inicioDia + cand[i + 1].h[0] * 60000;
+        if (fim <= ini) return;
+        lista.push({
+          data: a.data,
+          entrada: i === 0 ? a.entrada : Object.assign({}, a.entrada, { em: ini }),
+          saida: i === cand.length - 1 ? a.saida : Object.assign({}, a.saida, { em: fim }),
+          turma: x.t.turma + (x.t.dia || x.t.horario ? ' · ' + [x.t.dia, x.t.horario].filter(Boolean).join(' ') : ''),
+          turmaId: x.t.id || '',
+          min: Math.round((fim - ini) / 60000),
+          dividida: { parte: i + 1, de: cand.length },
+          original: a,
+        });
+      });
+    });
+    return lista;
   }
 
   /* Confere uma aula inteira lançada à mão (entrada + saída juntas): as duas precisam formar uma
@@ -839,7 +910,7 @@
   return {
     asaasLinhas: asaasLinhas, asaasCasarAluno: asaasCasarAluno, asaasPlano: asaasPlano,
     pontoSlug: pontoSlug, fmtHM: fmtHM, dataLocal: dataLocal, horaLocal: horaLocal,
-    periodoFechamento: periodoFechamento, parearPonto: parearPonto, conferirBatidaNova: conferirBatidaNova, conferirAulaNova: conferirAulaNova, compararComHorario: compararComHorario,
+    periodoFechamento: periodoFechamento, parearPonto: parearPonto, dividirAulasPelaGrade: dividirAulasPelaGrade, conferirBatidaNova: conferirBatidaNova, conferirAulaNova: conferirAulaNova, compararComHorario: compararComHorario,
     DIAS_ORDEM: DIAS_ORDEM, DIAS_FULL: DIAS_FULL,
     norm: norm, diasDaTurma: diasDaTurma, horarioMin: horarioMin, horariosSeSobrepoem: horariosSeSobrepoem,
     turmaOcupaHorario: turmaOcupaHorario, salaOnline: salaOnline, fmtHoraTurma: fmtHoraTurma, fmtHorarioTurma: fmtHorarioTurma, conflitosTurma: conflitosTurma,

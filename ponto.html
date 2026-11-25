@@ -77,7 +77,7 @@ label { display: block; font-weight: 700; margin: 1rem 0 .35rem; }
   (function relogio() { document.getElementById('relogio').textContent = hora(new Date()); setTimeout(relogio, 5000); })();
 
   // Estado da tela
-  var E = { cfg: null, prof: null, pin: '', turma: null, outra: false, outraTexto: '', erro: '', enviando: false, feito: null };
+  var E = { cfg: null, prof: null, pin: '', turma: null, outra: false, outraTexto: '', erro: '', enviando: false, feito: null, troca: null };
   var timerVolta = null;
 
   function carregarScript(src) {
@@ -96,6 +96,7 @@ label { display: block; font-weight: 700; margin: 1rem 0 .35rem; }
     clearTimeout(timerVolta);
     if (!E.cfg) return;
     if (E.feito) return renderFeito();
+    if (E.troca) return renderTroca();
     if (!E.prof) return renderNomes();
     if (E.pin.length < 4) return renderPin();
     return renderTurma();
@@ -170,13 +171,43 @@ label { display: block; font-weight: 700; margin: 1rem 0 .35rem; }
     timerVolta = setTimeout(function () { reiniciar(); }, 15000);
   }
 
-  function reiniciar() { E.prof = null; E.pin = ''; E.turma = null; E.outra = false; E.outraTexto = ''; E.erro = ''; E.enviando = false; E.feito = null; render(); }
+  function reiniciar() { E.prof = null; E.pin = ''; E.turma = null; E.outra = false; E.outraTexto = ''; E.erro = ''; E.enviando = false; E.feito = null; E.troca = null; render(); }
 
+  function turmaEscolhida() {
+    return {
+      nome: E.outra ? E.outraTexto.trim() : (E.turma.nome + (E.turma.quando ? ' · ' + E.turma.quando : '')),
+      id: E.outra ? (E.outraId || '') : (E.turma.id || ''),
+    };
+  }
+  /* Troca de turma: o professor está com uma aula aberta hoje (bateu entrada e não bateu saída)
+     e agora bate ENTRADA em outra turma. Em vez de deixar a aula anterior sem saída, pergunta se
+     é pra fechar a anterior e abrir a nova no mesmo toque. */
   function bater(tipo) {
     if (E.enviando) return;
-    var turmaNome = E.outra ? E.outraTexto.trim() : (E.turma.nome + (E.turma.quando ? ' · ' + E.turma.quando : ''));
-    var turmaId = E.outra ? (E.outraId || '') : (E.turma.id || '');
-    if (!turmaNome) return;
+    var t = turmaEscolhida();
+    if (!t.nome) return;
+    var sug = sugestao();
+    if (tipo === 'entrada' && sug.tipo === 'saida' && (sug.turmaId ? sug.turmaId !== t.id : sug.turma !== t.nome)) {
+      E.troca = { de: { nome: sug.turma || 'aula anterior', id: sug.turmaId || '' }, para: t };
+      render(); return;
+    }
+    registrar([{ tipo: tipo, turma: t }]);
+  }
+  function renderTroca() {
+    var tr = E.troca;
+    app.innerHTML = '<button class="voltar" data-a="troca-voltar">← Voltar</button>' +
+      (E.erro ? '<p class="erro">' + esc(E.erro) + '</p>' : '') +
+      '<h1>Trocando de turma?</h1>' +
+      '<p class="muted">Você ainda está com a <b>' + esc(tr.de.nome) + '</b> aberta (bateu entrada e não bateu saída).</p>' +
+      '<div class="acoes" style="flex-direction:column">' +
+      '<button class="grande entrada sugerido" data-a="troca-sim"' + (E.enviando ? ' disabled' : '') + '>Sair de ' + esc(tr.de.nome.split(' · ')[0]) + ' e entrar em ' + esc(tr.para.nome.split(' · ')[0]) + '</button>' +
+      '<button class="op" style="width:100%;text-align:center" data-a="troca-nao"' + (E.enviando ? ' disabled' : '') + '>Só registrar a entrada</button>' +
+      '</div>' +
+      (E.enviando ? '<p class="muted" style="text-align:center">Registrando…</p>' : '');
+  }
+  /* Grava as batidas na ordem (uma depois da outra, pra saída ficar antes da entrada no horário do servidor). */
+  function registrar(lista) {
+    if (E.enviando) return;
     E.enviando = true; E.erro = ''; render();
     var concluiu = false;
     var limite = setTimeout(function () {
@@ -186,29 +217,33 @@ label { display: block; font-weight: 700; margin: 1rem 0 .35rem; }
       render();
     }, 20000);
     firebasePronto().then(function (db) {
-      return db.collection('ponto').add({
-        profId: E.prof.id, profNome: E.prof.nome, turma: turmaNome, turmaId: turmaId, tipo: tipo, pin: E.pin,
-        em: firebase.firestore.FieldValue.serverTimestamp(),
-      });
+      return lista.reduce(function (p, b) {
+        return p.then(function () {
+          return db.collection('ponto').add({
+            profId: E.prof.id, profNome: E.prof.nome, turma: b.turma.nome, turmaId: b.turma.id, tipo: b.tipo, pin: E.pin,
+            em: firebase.firestore.FieldValue.serverTimestamp(),
+          });
+        });
+      }, Promise.resolve());
     }).then(function () {
       concluiu = true; clearTimeout(limite);
       var agora = new Date();
-      gravarUltimo({ profId: E.prof.id, tipo: tipo, turmaId: turmaId, turma: turmaNome, dia: hojeISO() });
-      E.enviando = false;
-      E.feito = { tipo: tipo, hora: hora(agora), nome: E.prof.nome, turma: turmaNome };
+      var ult = lista[lista.length - 1];
+      gravarUltimo({ profId: E.prof.id, tipo: ult.tipo, turmaId: ult.turma.id, turma: ult.turma.nome, dia: hojeISO() });
+      E.enviando = false; E.troca = null;
+      E.feito = { tipo: ult.tipo, hora: hora(agora), nome: E.prof.nome, turma: lista.length > 1 ? ('saiu de ' + lista[0].turma.nome.split(' · ')[0] + ' · entrou em ' + ult.turma.nome) : ult.turma.nome };
       render();
     }).catch(function (err) {
       concluiu = true; clearTimeout(limite);
       E.enviando = false;
       if (err && err.code === 'permission-denied') {
-        E.pin = ''; E.erro = 'PIN incorreto. Tente de novo ou fale com a coordenação.';
+        E.pin = ''; E.troca = null; E.erro = 'PIN incorreto. Tente de novo ou fale com a coordenação.';
       } else {
         E.erro = 'Não consegui registrar agora. Confira a internet e tente de novo.';
       }
       render();
     });
   }
-
   app.addEventListener('click', function (e) {
     var b = e.target.closest('[data-a]');
     if (!b || b.tagName === 'SELECT' || b.tagName === 'INPUT') return;
@@ -221,6 +256,9 @@ label { display: block; font-weight: 700; margin: 1rem 0 .35rem; }
     if (a === 'turma') { E.outra = false; E.turma = (E.prof.turmas || []).filter(function (t) { return t.id === b.dataset.id; })[0] || null; render(); return; }
     if (a === 'outra') { E.outra = true; E.turma = null; render(); return; }
     if (a === 'bater') { bater(b.dataset.t); return; }
+    if (a === 'troca-sim' && E.troca) { registrar([{ tipo: 'saida', turma: E.troca.de }, { tipo: 'entrada', turma: E.troca.para }]); return; }
+    if (a === 'troca-nao' && E.troca) { registrar([{ tipo: 'entrada', turma: E.troca.para }]); return; }
+    if (a === 'troca-voltar') { E.troca = null; E.erro = ''; render(); return; }
   });
   app.addEventListener('change', function (e) {
     if (e.target.dataset.a === 'sel-outra') {

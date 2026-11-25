@@ -2681,8 +2681,22 @@
       if (V.view === 'ponto') render();
     });
   }
+  /* Turmas do professor que valiam na data da aula (mesmo semestre, sem as canceladas/que não
+     formaram) — usadas pra dividir uma aula "em bloco" pela grade. */
+  function turmasDoProfNaData(prof, dataISO) {
+    if (!prof) return [];
+    const sem = L.semestreDeData(dataISO);
+    return S.turmas.filter(function (t) { return L.norm(t.professor) === L.norm(prof.nome) && t.semestre === sem && !/cancel|n[aã]o formou/i.test(t.situacao || ''); });
+  }
   function pontoPorProfessor() {
-    return L.parearPonto(V.pontoRegs || [], HOJE);
+    const grupos = L.parearPonto(V.pontoRegs || [], HOJE);
+    Object.keys(grupos).forEach(function (id) {
+      const g = grupos[id];
+      const prof = professorPorPontoId(id);
+      if (!prof) return;
+      g.aulas = g.aulas.reduce(function (lista, a) { return lista.concat(L.dividirAulasPelaGrade([a], turmasDoProfNaData(prof, a.data))); }, []);
+    });
+    return grupos;
   }
 
   function linhaAulaPonto(a) {
@@ -2694,6 +2708,7 @@
     if (cmp && cmp.extraMin) obs.push('<span class="tag tag-neutro">ficou ' + cmp.extraMin + ' min a mais</span>');
     if (a.min > 300) obs.push('<span class="tag tag-erro">mais de 5h — conferir</span>');
     if (a.entrada.manual || a.saida.manual) obs.push('<span class="tag tag-neutro">corrigido à mão</span>');
+    if (a.dividida) obs.push('<span class="tag tag-neutro" title="Bateu uma entrada e uma saída só para as aulas seguidas (' + esc(L.horaLocal(a.original.entrada.em)) + '–' + esc(L.horaLocal(a.original.saida.em)) + '). O painel dividiu pela grade.">bloco dividido pela grade ' + a.dividida.parte + '/' + a.dividida.de + '</span>');
     return '<tr><td>' + esc(L.fmtCurta(a.data)) + '</td><td>' + esc(a.turma || '—') + '</td>' +
       '<td>' + esc(L.horaLocal(a.entrada.em)) + '</td><td>' + esc(L.horaLocal(a.saida.em)) + '</td>' +
       '<td><b>' + esc(L.fmtHM(a.min)) + '</b></td><td>' + obs.join(' ') + '</td>' +
